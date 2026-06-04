@@ -990,6 +990,7 @@ function buildInstrumentOutlooks(sources) {
   const newsPools = collectOutlookNewsPools();
 
   return INSTRUMENT_REGISTRY.map((spec) => {
+    const meta = getCommodityMeta(spec.id);
     if (!meta) return null;
 
     const quote = resolveInstrumentQuote(spec, sources.commodities, null);
@@ -1147,7 +1148,7 @@ function buildCommodityOutlookFromSources(sources = {}) {
       categories,
       instruments,
       factors,
-      framework: { logicModel: '多因子+技术面（部分输入异常，已降级）', version: 'v1.17.0' },
+      framework: { logicModel: '多因子+技术面（部分输入异常，已降级）', version: 'v1.17.1' },
       sectors: OUTLOOK_SECTORS,
       stats: {
         categoryCount: categories.length,
@@ -1190,7 +1191,7 @@ function buildCommodityOutlookFromSources(sources = {}) {
       sectors: OUTLOOK_SECTORS,
       rangeFormula: '±min(σ×1.2,p90×0.85,板块上限)+高星新闻；mid=宏观/技术/新闻/盘中；贵金属au±1.2%',
       sectorClassCaps: SECTOR_CLASS_MAX_PCT,
-      version: 'v1.17.0',
+      version: 'v1.17.1',
     },
     sectors: OUTLOOK_SECTORS,
     stats: {
