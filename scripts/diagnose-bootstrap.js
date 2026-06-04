@@ -97,13 +97,34 @@ app.whenReady().then(async () => {
   const registryCount = INSTRUMENT_REGISTRY.length;
   const catalogCount = getAllCommodities().length;
   const engineProbe = buildCommodityOutlookFromSources(getCachedAllData()?.sources || {});
-  const firstInst = engineProbe.instruments?.[0];
+  const firstThree = (engineProbe.instruments || []).slice(0, 3);
+  const firstInst = firstThree[0];
   const firstHasPriceOrRange = Boolean(
     (firstInst?.price != null && !Number.isNaN(Number(firstInst.price))) ||
       (firstInst?.nextDayRangePct &&
         firstInst.nextDayRangePct.low != null &&
         firstInst.nextDayRangePct.high != null)
   );
+  const rangeStrings = firstThree.map((i) =>
+    i?.nextDayRangePct ? `${i.nextDayRangePct.low}|${i.nextDayRangePct.mid}|${i.nextDayRangePct.high}` : ''
+  );
+  const compositeScores = firstThree.map((i) => i?.compositeScore);
+  const rangesDistinct = new Set(rangeStrings.filter(Boolean)).size >= 2;
+  const scoresDistinct = new Set(compositeScores.filter((s) => s != null)).size >= 2;
+  const hasCommodities = Boolean(getCachedAllData()?.sources?.commodities?.exchanges?.some((e) => e.items?.length));
+  const noPendingDirection = !hasCommodities || firstThree.every((i) => !String(i?.directionLabel || '').includes('研判积累中'));
+  const auInst = (engineProbe.instruments || []).find((i) => String(i.id).toLowerCase() === 'au');
+  const auRange = auInst?.nextDayRangePct;
+  const auRangeSpan = auRange ? Number(auRange.high) - Number(auRange.low) : null;
+  const auRangeOk = auRangeSpan == null || auRangeSpan <= 1.5;
+  if (auRangeSpan != null && !auRangeOk) {
+    console.error(`[diagnose] au next-day range span ${auRangeSpan.toFixed(2)}% exceeds 1.5% cap`);
+  }
+  if (firstThree.length >= 3 && hasCommodities && (!rangesDistinct || !scoresDistinct || !noPendingDirection || !auRangeOk)) {
+    console.error(
+      `[diagnose] outlook diversity check FAILED rangesDistinct=${rangesDistinct} scoresDistinct=${scoresDistinct} noPendingDirection=${noPendingDirection} auRangeOk=${auRangeOk} auSpan=${auRangeSpan}`
+    );
+  }
   console.log(
     `[diagnose] catalog=${catalogCount} registry=${registryCount} engineInstruments=${engineProbe.instruments?.length || 0} firstPriceOrRange=${firstHasPriceOrRange} version=${APP_VERSION}`
   );
@@ -198,6 +219,11 @@ app.whenReady().then(async () => {
         registryCount,
         engineInstrumentCount: engineProbe.instruments?.length || 0,
         engineFirstHasPriceOrRange: firstHasPriceOrRange,
+        outlookRangesDistinct: rangesDistinct,
+        outlookScoresDistinct: scoresDistinct,
+        outlookNoPendingDirection: noPendingDirection,
+        auRangeSpan,
+        auRangeOk,
         ipcInstrumentCount: ipcOutlook?.instruments?.length || 0,
         result,
         consoleErrors: logs,

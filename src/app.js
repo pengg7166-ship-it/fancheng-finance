@@ -2778,8 +2778,36 @@ function formatOutlookRangePct(range) {
   const low = Number(range.low);
   const high = Number(range.high);
   if (Number.isNaN(low) || Number.isNaN(high)) return '—';
-  const sign = (n) => (n > 0 ? '+' : '') + n.toFixed(2);
+  const sign = (n, digits = 2) => (n > 0 ? '+' : '') + n.toFixed(digits);
   return `${sign(low)}% ~ ${sign(high)}%`;
+}
+
+function formatOutlookRangeSubtext(range) {
+  if (!range) return '';
+  const mid = Number(range.mid);
+  const sign = (n, digits = 2) => (n > 0 ? '+' : '') + n.toFixed(digits);
+  const parts = [];
+  if (!Number.isNaN(mid)) parts.push(`中心 ${sign(mid)}%`);
+  if (range.expectedMoveDisplay) parts.push(range.expectedMoveDisplay);
+  if (range.histVol20dDisplay) parts.push(range.histVol20dDisplay);
+  return parts.join(' · ');
+}
+
+function formatOutlookRangeCappedNote(range) {
+  if (!range?.rangeCapped) return '';
+  return range.rangeCappedNote || '区间已按历史上限校准';
+}
+
+function formatOutlookRangeBias(range, compositeScore) {
+  if (!range) return '';
+  const absScore = Math.abs(Number(compositeScore) || 0);
+  if (absScore > 0.12 && range.bias && range.bias !== 'neutral') {
+    return `${range.biasArrow || ''} ${range.biasLabel || ''}`.trim();
+  }
+  if (absScore <= 0.12) {
+    return `${range.biasArrow || '→'} 震荡`;
+  }
+  return `${range.biasArrow || ''} ${range.biasLabel || '震荡'}`.trim();
 }
 
 function renderOutlookTechBadge(b) {
@@ -2795,6 +2823,10 @@ function renderOutlookInstrumentDetail(inst) {
         `<li class="outlook-news-hit ${outlookDirectionClass(h.direction)}"><span class="outlook-news-dir">${escapeHtml(h.direction === 'bullish' ? '↑' : h.direction === 'bearish' ? '↓' : '→')}</span> ${escapeHtml(h.title || '')} <span class="outlook-news-src">${escapeHtml(h.source || '')}</span></li>`
     )
     .join('');
+  const newsHeadline =
+    f.news?.hits?.[0]?.title != null
+      ? `<p class="outlook-news-top">${escapeHtml(String(f.news.hitCount || f.news.hits.length))} 条命中 · ${escapeHtml(f.news.hits[0].title.slice(0, 72))}${f.news.hits[0].title.length > 72 ? '…' : ''}</p>`
+      : `<p class="outlook-news-top">${escapeHtml(String(f.news?.hitCount ?? 0))} 条命中 · 综合分 ${f.news?.score != null ? (f.news.score >= 0 ? '+' : '') + Number(f.news.score).toFixed(2) : '0.00'}</p>`;
   const macroRows = (f.macro?.factors || [])
     .map(
       (mf) =>
@@ -2826,7 +2858,8 @@ function renderOutlookInstrumentDetail(inst) {
       </div>
       <div class="outlook-detail-block">
         <h5>新闻命中</h5>
-        <ul class="outlook-news-hits">${newsHits || '<li class="outlook-news-hit">暂无显著新闻</li>'}</ul>
+        ${newsHeadline}
+        <ul class="outlook-news-hits">${newsHits || '<li class="outlook-news-hit">暂无 headline</li>'}</ul>
       </div>
     </div>
     ${inst.sourceNote ? `<p class="outlook-source-note">${escapeHtml(inst.sourceNote)}</p>` : ''}
@@ -2860,15 +2893,17 @@ function renderOutlookInstrumentRow(inst) {
       <div class="outlook-inst-col outlook-inst-price">${priceHtml} ${chg}</div>
       <div class="outlook-inst-col outlook-inst-range">
         <span class="outlook-range-label">次日区间</span>
-        <span class="outlook-range-value ${outlookDirectionClass(range.bias)}">${formatOutlookRangePct(range)}</span>
-        <span class="outlook-range-bias">${escapeHtml(range.biasArrow || '')} ${escapeHtml(range.biasLabel || '')}</span>
+        <span class="outlook-range-value ${outlookDirectionClass(range.bias)}" title="${escapeAttr(formatOutlookRangeCappedNote(range))}">${formatOutlookRangePct(range)}</span>
+        <span class="outlook-range-bias">${escapeHtml(formatOutlookRangeSubtext(range))}</span>
+        ${range.rangeCapped ? `<span class="outlook-range-capped" title="${escapeAttr(formatOutlookRangeCappedNote(range))}">已校准</span>` : ''}
       </div>
       <div class="outlook-inst-col outlook-inst-dir">
         <span class="outlook-dir-arrow">${escapeHtml(inst.directionArrow || '→')}</span>
         <span class="outlook-dir-label">${escapeHtml(inst.directionLabel || '震荡')}</span>
+        <span class="outlook-composite-score" title="综合分">${escapeHtml(inst.compositeScoreDisplay || (inst.compositeScore != null ? `${inst.compositeScore >= 0 ? '+' : ''}${Number(inst.compositeScore).toFixed(2)}` : ''))}</span>
         <span class="outlook-stars">${escapeHtml(inst.starsHtml || '')}</span>
       </div>
-      <div class="outlook-inst-col outlook-inst-badges">${badges || '<span class="outlook-tech-badge outlook-badge-flat">研判积累中</span>'}</div>
+      <div class="outlook-inst-col outlook-inst-badges">${badges || '<span class="outlook-tech-badge outlook-badge-flat">待数据</span>'}</div>
       <span class="outlook-expand-icon" aria-hidden="true">▸</span>
     </button>
     ${renderOutlookInstrumentDetail(inst)}
@@ -3168,7 +3203,7 @@ function renderOutlookPanel(source) {
         <h3 class="outlook-section-title">四大类 outlook 参考</h3>
         <div class="outlook-category-grid">${categoryCards}</div>
       </section>
-      <p class="policy-note outlook-note">v1.16.1 多因子+技术面 · 六板块 ${instruments.length} 品种 · BOLL/MA/量比/持仓Δ · 区间非精确预测 · 仅供参考</p>
+      <p class="policy-note outlook-note">v1.17.1 历史波动校准次日区间 · 六板块 ${instruments.length} 品种 · σ20/ATR/p90 · 仅供参考</p>
     </div>
   </div>`;
 }

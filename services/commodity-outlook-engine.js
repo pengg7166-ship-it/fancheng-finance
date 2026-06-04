@@ -5,8 +5,12 @@
 const diskCache = require('./disk-cache');
 const { normalizeCommodityId } = require('./policy-commodity-map');
 const { getCommodityMeta, getAllCommodities } = require('./commodities-catalog');
-const { getNewsKeywords, scoreNewsItem, getFastNewsPool, getGlobalNewsPoolSync } = require('./commodities-news');
-const { analyzeInstrumentTechnicals } = require('./commodity-technical-analyzer');
+const { getNewsKeywords, scoreNewsItem, getGlobalNewsPoolSync } = require('./commodities-news');
+const {
+  analyzeInstrumentTechnicals,
+  hasCachedDayKlines,
+  readCachedKlines,
+} = require('./commodity-technical-analyzer');
 
 const OUTLOOK_DISK_KEY = 'commodity-outlook-v2.json';
 const OUTLOOK_DISK_TTL_MS = 60 * 1000;
@@ -50,6 +54,18 @@ const OUTLOOK_BUCKET_BY_SECTOR = {
 const OUTLOOK_PRIORITY_BY_ID = {
   sc: 1, fu: 1, rb: 1, i: 1, cu: 1, al: 1, au: 1, ag: 1, lc: 1, p: 1, TA: 1, MA: 1, jm: 1, FG: 1,
 };
+
+/** 次日区间按板块/品种的历史波动上限（% half-width 或 total span 参考） */
+const SECTOR_CLASS_MAX_PCT = {
+  precious: { au: 1.2, ag: 2.5, pt: 1.5, pd: 1.5, default: 1.5 },
+  energy: { sc: 3, fu: 3, pg: 3, lu: 3, bu: 3, ec: 3, ZC: 3, default: 3 },
+  chemical: { default: 2.5 },
+  black: { default: 3 },
+  metals: { default: 3 },
+  agriculture: { default: 2.5 },
+};
+
+const KLINE_BACKFILL_PRIORITY = ['cu', 'SA', 'au', 'ag', 'rb', 'sc'];
 
 function inferOutlookSector(meta) {
   const id = meta.id;
@@ -626,6 +642,7 @@ function scoreNewsForInstrument(meta, sources, newsPools = []) {
   let bullish = 0;
   let bearish = 0;
   let weight = 0;
+  let hitCount = 0;
   const hits = [];
 
   const intelPools = [
@@ -642,6 +659,7 @@ function scoreNewsForInstrument(meta, sources, newsPools = []) {
 
     if (!relevance) continue;
 
+    hitCount += 1;
     const matchScore = scoreNewsItem(item, keywords, meta);
     const w = ((item.stars || 2) / 5) * (1 + Math.min(matchScore, 20) / 20);
     const dir = item.direction || 'neutral';
@@ -649,7 +667,7 @@ function scoreNewsForInstrument(meta, sources, newsPools = []) {
     else if (dir === 'bearish') bearish += w;
     weight += w;
 
-    if (hits.length < 5 && (item.stars || 0) >= 2) {
+    if (hits.length < 5) {
       hits.push({
         title: (item.title || '').slice(0, 80),
         direction: dir,
@@ -661,78 +679,186 @@ function scoreNewsForInstrument(meta, sources, newsPools = []) {
   }
 
   const score = weight > 0 ? clamp((bullish - bearish) / weight, -1, 1) : 0;
-  let summary = '新闻面中性';
-  if (weight > 0) {
-    if (score > 0.2) summary = `新闻偏多（${hits.length ? hits[0].title.slice(0, 24) : '相关报道'}…）`;
-    else if (score < -0.2) summary = `新闻偏空（${hits.length ? hits[0].title.slice(0, 24) : '相关报道'}…）`;
-    else summary = '新闻多空交织，关注 headline 验证';
+  let summary;
+  if (hitCount === 0) {
+    summary = `新闻中性（0条命中，综合分 0.00）`;
+  } else if (score > 0.2) {
+    summary = `新闻偏多 ${hitCount}条（${hits[0]?.title?.slice(0, 24) || '相关报道'}…）`;
+  } else if (score < -0.2) {
+    summary = `新闻偏空 ${hitCount}条（${hits[0]?.title?.slice(0, 24) || '相关报道'}…）`;
+  } else {
+    summary = `新闻多空交织 ${hitCount}条，综合分 ${score >= 0 ? '+' : ''}${score.toFixed(2)}`;
   }
 
   return {
     score,
-    confidence: clampStars(weight > 0 ? 2 + Math.min(weight, 4) : 2),
+    confidence: clampStars(hitCount > 0 ? 2 + Math.min(weight, 3) : 1.5),
     summary,
     weight,
+    hitCount,
     hits,
     bullish,
     bearish,
   };
 }
 
-function computeNextDayRangePct({ compositeScore, boll, newsScore, macroScore, techScore }) {
-  const baseVol = boll?.bandwidth ? boll.bandwidth / 2 : 0.8;
-  const newsShock = Math.abs(newsScore || 0) * 0.45;
-  const macroTilt = (macroScore || 0) * 0.35;
-  const techTilt = (techScore || 0) * 0.25;
-  const mid = macroTilt + techTilt + (newsScore || 0) * 0.2;
+function getClassMaxPct(sector, instrumentId) {
+  const caps = SECTOR_CLASS_MAX_PCT[sector] || SECTOR_CLASS_MAX_PCT.agriculture;
+  const id = String(instrumentId || '').toLowerCase();
+  return caps[id] ?? caps.default ?? 2.5;
+}
 
-  let low = mid - baseVol - newsShock;
-  let high = mid + baseVol + newsShock;
-  low = clamp(low, -6, 6);
-  high = clamp(high, -6, 6);
-  if (low > high) [low, high] = [high, low];
+function countHighStarNewsHits(newsFactor) {
+  return (newsFactor?.hits || []).filter((h) => (h.stars || 0) >= 4).length;
+}
+
+function parseVix(fedSource) {
+  const vixInd = findIndicator(fedSource?.indicators, 'VIXCLS');
+  const vix = parseFloat(vixInd?.value);
+  return Number.isNaN(vix) ? 20 : vix;
+}
+
+function computeNextDayRangePct({
+  compositeScore,
+  historicalVol,
+  newsFactor,
+  macroScore,
+  techScore,
+  intradayChangePct,
+  sector,
+  instrumentId,
+  vix,
+}) {
+  const classMax = getClassMaxPct(sector, instrumentId);
+  const idLower = String(instrumentId || '').toLowerCase();
+  const sigma = historicalVol?.sigmaDaily20 ?? historicalVol?.histVol20d ?? 0.45;
+  const p90 = historicalVol?.absReturnP90 ?? sigma * 1.35;
+  const atrPct = historicalVol?.atrPct14 ?? sigma;
+
+  let halfWidth;
+  if (sector === 'precious') {
+    halfWidth = Math.min(sigma * 1.2, p90 * 0.85, classMax);
+  } else if (sector === 'energy' || sector === 'black' || sector === 'metals') {
+    halfWidth = Math.min(Math.max(sigma * 1.2, atrPct * 0.55), classMax);
+  } else {
+    halfWidth = Math.min(sigma * 1.2, p90 * 0.85, classMax);
+  }
+  halfWidth = Math.max(halfWidth, 0.12);
+
+  const highStarCount = countHighStarNewsHits(newsFactor);
+  const newsAddPerStar = idLower === 'au' || idLower === 'pt' || idLower === 'pd' ? 0.3 : 0.5;
+  const extremeNewsShock = (vix || 20) > 24 && highStarCount >= 1;
+  let newsShockAdd = highStarCount * newsAddPerStar;
+
+  if (extremeNewsShock && idLower === 'au') {
+    halfWidth = Math.min(halfWidth + newsShockAdd, 1.0);
+    newsShockAdd = 0;
+  } else {
+    halfWidth += newsShockAdd;
+  }
+
+  const macroTilt = (macroScore || 0) * 0.12;
+  const techTilt = (techScore || 0) * 0.08;
+  const newsTilt = (newsFactor?.score || 0) * 0.06;
+  const intradayTilt = clamp((intradayChangePct || 0) / 100, -0.3, 0.3) * 0.15;
+  let mid = macroTilt + techTilt + newsTilt + intradayTilt;
+  mid = clamp(mid, -classMax * 0.55, classMax * 0.55);
 
   const bias = scoreToDirection(compositeScore);
+  let downHalf = halfWidth;
+  let upHalf = halfWidth;
+  if (bias === 'bearish') {
+    downHalf *= 1.1;
+    upHalf *= 0.92;
+  } else if (bias === 'bullish') {
+    downHalf *= 0.92;
+    upHalf *= 1.1;
+  }
+
+  let low = mid - downHalf;
+  let high = mid + upHalf;
+
+  const effectiveMax = extremeNewsShock && idLower === 'au' ? 1.0 : classMax + (extremeNewsShock ? 0.35 : 0);
+  let rangeCapped = false;
+  const rawSpan = high - low;
+  if (Math.abs(low) > effectiveMax || Math.abs(high) > effectiveMax || rawSpan > effectiveMax * 2.05) {
+    rangeCapped = true;
+    low = clamp(low, -effectiveMax, effectiveMax);
+    high = clamp(high, -effectiveMax, effectiveMax);
+    if (low > high) [low, high] = [high, low];
+  }
+
+  const expectedMovePct = (Math.abs(low - mid) + Math.abs(high - mid)) / 2;
+  const histVol20d = historicalVol?.histVol20d ?? sigma;
+
+  let biasLabel = directionLabel(bias);
+  if (Math.abs(compositeScore || 0) <= 0.12) biasLabel = '震荡';
+
   return {
-    low: +low.toFixed(2),
-    mid: +mid.toFixed(2),
-    high: +high.toFixed(2),
+    low: +low.toFixed(3),
+    mid: +mid.toFixed(3),
+    high: +high.toFixed(3),
     bias,
-    biasLabel: directionLabel(bias),
+    biasLabel,
     biasArrow: directionArrow(bias),
-    formula: `mid=宏观×0.35+技术×0.25+新闻×0.2；区间±(BOLL带宽/2+新闻冲击)`,
+    expectedMovePct: +expectedMovePct.toFixed(2),
+    expectedMoveDisplay: `预测波动 ±${expectedMovePct.toFixed(2)}%`,
+    histVol20d: +histVol20d.toFixed(2),
+    histVol20dDisplay: `历史20日均波动 ±${histVol20d.toFixed(2)}%`,
+    rangeCapped,
+    rangeCappedNote: rangeCapped ? '区间已按品种历史上限校准' : null,
+    halfWidth: +halfWidth.toFixed(3),
+    classMaxPct: classMax,
+    volatilityProxy: +sigma.toFixed(3),
+    formula: `±min(σ×1.2,p90×0.85,板块上限)+高星新闻；mid=宏观/技术/新闻/盘中`,
   };
 }
 
-function buildInstrumentHorizons(macroScore, newsFactor, technical, bucketId) {
+function computeInstrumentConfidence({ hasLivePrice, hasEnough, dataPoints, newsHitCount, oiDelta, volumeRatio, compositeScore }) {
+  let raw = 1;
+  if (hasLivePrice) raw += 1.2;
+  if (hasEnough) raw += 1.5;
+  else if (dataPoints >= 5) raw += 0.7;
+  if (newsHitCount > 0) raw += Math.min(newsHitCount * 0.15, 1);
+  if (oiDelta != null) raw += 0.4;
+  if (volumeRatio != null) raw += 0.25;
+  raw += Math.abs(compositeScore || 0) * 1.2;
+  return clampStars(raw);
+}
+
+function buildInstrumentHorizons(macroScore, newsFactor, technical, bucketId, compositeScore) {
   const horizons = {};
   for (const h of ['short', 'medium', 'long']) {
     const w = INSTRUMENT_FACTOR_WEIGHTS[h];
     const volOiScore = ((technical.volume?.score || 0) + (technical.oi?.score || 0)) / 2;
+    const intradayScore = technical.intraday?.score || 0;
     const composite =
       macroScore * w.macro +
       newsFactor.score * w.news +
       technical.techScore * w.technical +
-      volOiScore * w.volumeOi;
+      volOiScore * w.volumeOi +
+      intradayScore * 0.08;
 
     const score = clamp(composite, -1, 1);
     const direction = scoreToDirection(score);
+    const confidence = computeInstrumentConfidence({
+      hasLivePrice: technical.hasLivePrice,
+      hasEnough: technical.hasEnough,
+      dataPoints: technical.dataPoints,
+      newsHitCount: newsFactor.hitCount || 0,
+      oiDelta: technical.oi?.deltaPct,
+      volumeRatio: technical.volume?.ratio,
+      compositeScore: score,
+    });
     horizons[h] = {
       score: +score.toFixed(4),
       direction,
       directionArrow: directionArrow(direction),
       directionLabel: directionLabel(direction),
-      confidence: clampStars(
-        2 +
-          Math.abs(score) * 2 +
-          (technical.hasEnough ? 0.8 : 0) +
-          (newsFactor.weight > 0 ? 0.5 : 0)
-      ),
-      stars: 0,
-      starsHtml: '',
+      confidence,
+      stars: confidence,
+      starsHtml: starsToHtml(confidence),
     };
-    horizons[h].stars = horizons[h].confidence;
-    horizons[h].starsHtml = starsToHtml(horizons[h].confidence);
   }
   return horizons;
 }
@@ -740,7 +866,10 @@ function buildInstrumentHorizons(macroScore, newsFactor, technical, bucketId) {
 function buildInstrumentRationale(meta, horizons, nextDay, factors, technical) {
   const short = horizons.short;
   const parts = [];
-  parts.push(`${meta.name}次日研判${nextDay.biasLabel}${nextDay.biasArrow}，预估波动 ${nextDay.low}% ~ ${nextDay.high}%`);
+  parts.push(
+    `${meta.name}次日研判${nextDay.biasLabel}${nextDay.biasArrow}，${nextDay.expectedMoveDisplay || `预估波动 ${nextDay.low}% ~ ${nextDay.high}%`}`
+  );
+  if (nextDay.histVol20dDisplay) parts.push(nextDay.histVol20dDisplay);
   if (technical.maStack?.alignmentLabel) parts.push(`均线${technical.maStack.alignmentLabel}`);
   if (technical.boll?.positionLabel) parts.push(`BOLL${technical.boll.positionLabel}（带宽 ${technical.boll.bandwidth}%）`);
   if (technical.volume?.label) parts.push(`${technical.volume.label}（量比 ${technical.volume.ratio}）`);
@@ -755,15 +884,20 @@ function buildInstrumentRationale(meta, horizons, nextDay, factors, technical) {
 function buildTechBadges(technical, outlookPending = false) {
   const badges = [];
   if (outlookPending) {
-    badges.push({ id: 'pending-outlook', label: '研判积累中', trend: 'flat' });
+    badges.push({ id: 'pending-outlook', label: '待加载报价', trend: 'flat' });
+    return badges;
   }
-  if (!technical.hasEnough) {
-    badges.push({ id: 'pending', label: '指标待日线积累', trend: 'flat' });
+  if (!technical.hasEnough && technical.hasLivePrice) {
+    badges.push({ id: 'partial-data', label: '日线不足·用盘中+资讯', trend: 'flat' });
   }
-  if (technical.maStack) {
+  if (technical.maStack?.alignmentLabel) {
+    const maLabel =
+      technical.maStack.maSpreadPct != null && Math.abs(technical.maStack.maSpreadPct) >= 0.05
+        ? `${technical.maStack.alignmentLabel} ${technical.maStack.maSpreadPct > 0 ? '+' : ''}${technical.maStack.maSpreadPct}%`
+        : technical.maStack.alignmentLabel;
     badges.push({
       id: 'ma',
-      label: technical.maStack.alignmentLabel,
+      label: maLabel,
       trend: technical.maStack.alignment.includes('bull') ? 'up' : technical.maStack.alignment.includes('bear') ? 'down' : 'flat',
     });
     if (technical.maStack.crossLabel) {
@@ -771,16 +905,36 @@ function buildTechBadges(technical, outlookPending = false) {
     }
   }
   if (technical.boll) {
-    badges.push({ id: 'boll', label: `BOLL${technical.boll.positionLabel}`, trend: technical.boll.position === 'upper' ? 'up' : technical.boll.position === 'lower' ? 'down' : 'flat' });
+    const bollLabel = technical.boll.position === 'upper' ? 'BOLL上轨' : technical.boll.position === 'lower' ? 'BOLL下轨' : 'BOLL中轨';
+    badges.push({
+      id: 'boll',
+      label: bollLabel,
+      trend: technical.boll.position === 'upper' ? 'up' : technical.boll.position === 'lower' ? 'down' : 'flat',
+    });
+  } else if (technical.intraday?.rangePct != null && technical.hasLivePrice) {
+    badges.push({ id: 'intraday-range', label: `振幅${technical.intraday.rangePct.toFixed(2)}%`, trend: 'flat' });
   }
-  if (technical.volume) {
-    badges.push({ id: 'vol', label: `量比${technical.volume.ratio}`, trend: technical.volume.ratio >= 1.1 ? 'up' : technical.volume.ratio <= 0.9 ? 'down' : 'flat' });
+  if (technical.volume?.ratio != null) {
+    badges.push({
+      id: 'vol',
+      label: `量比${technical.volume.ratio}`,
+      trend: technical.volume.ratio >= 1.1 ? 'up' : technical.volume.ratio <= 0.9 ? 'down' : 'flat',
+    });
   }
   if (technical.oi?.deltaPct != null) {
     badges.push({
       id: 'oi',
       label: `持仓${technical.oi.deltaPct > 0 ? '+' : ''}${technical.oi.deltaPct}%`,
       trend: technical.oi.deltaPct > 0 ? 'up' : technical.oi.deltaPct < 0 ? 'down' : 'flat',
+    });
+  } else if (technical.oi?.label) {
+    badges.push({ id: 'oi-flat', label: technical.oi.label, trend: 'flat' });
+  }
+  if (technical.intraday?.changePct != null && technical.hasLivePrice && !technical.maStack) {
+    badges.push({
+      id: 'intraday-chg',
+      label: `盘中${technical.intraday.changePct > 0 ? '+' : ''}${technical.intraday.changePct.toFixed(2)}%`,
+      trend: technical.intraday.changePct > 0.05 ? 'up' : technical.intraday.changePct < -0.05 ? 'down' : 'flat',
     });
   }
   return badges;
@@ -792,16 +946,50 @@ function macroScoreForBucket(bucketId, sources) {
   return outlook.score;
 }
 
-function buildInstrumentOutlooks(sources) {
-  let newsPools = [];
+let klineBackfillPromise = null;
+
+function triggerOutlookKlineBackfill(limit = 40) {
+  if (klineBackfillPromise) return klineBackfillPromise;
+  klineBackfillPromise = Promise.resolve().then(async () => {
+    const { fetchCommodityHistory } = require('./commodities-history-fetcher');
+    const prioritySet = new Set(KLINE_BACKFILL_PRIORITY);
+    const priority = INSTRUMENT_REGISTRY.filter(
+      (spec) => prioritySet.has(String(spec.id).toLowerCase()) && !hasCachedDayKlines(spec.id, 20)
+    );
+    const missing = INSTRUMENT_REGISTRY.filter(
+      (spec) => !prioritySet.has(String(spec.id).toLowerCase()) && !hasCachedDayKlines(spec.id, 20)
+    ).slice(0, limit);
+    const queue = [...priority, ...missing];
+    for (let i = 0; i < queue.length; i += 1) {
+      try {
+        await fetchCommodityHistory(queue[i].id, 'day');
+      } catch {
+        // ignore per-instrument failures
+      }
+      if (i < queue.length - 1) await new Promise((r) => setTimeout(r, 180));
+    }
+  }).finally(() => {
+    klineBackfillPromise = null;
+  });
+  return klineBackfillPromise;
+}
+
+function collectOutlookNewsPools() {
   try {
-    newsPools = [...(getFastNewsPool()?.items || []), ...(getGlobalNewsPoolSync()?.items || [])];
+    const newsMod = require('./commodities-news');
+    newsMod.initNewsCacheFromDisk?.();
+    const global = newsMod.getGlobalNewsPoolSync();
+    const pools = Array.isArray(global) ? [...global] : [...(global?.items || [])];
+    return pools;
   } catch {
-    newsPools = [];
+    return [];
   }
+}
+
+function buildInstrumentOutlooks(sources) {
+  const newsPools = collectOutlookNewsPools();
 
   return INSTRUMENT_REGISTRY.map((spec) => {
-    const meta = getCommodityMeta(spec.id);
     if (!meta) return null;
 
     const quote = resolveInstrumentQuote(spec, sources.commodities, null);
@@ -810,33 +998,61 @@ function buildInstrumentOutlooks(sources) {
     const newsFactor = scoreNewsForInstrument(meta, sources, newsPools);
     const macroScore = macroScoreForBucket(spec.bucket, sources);
 
-    const outlookPending = !technical.hasEnough && newsFactor.weight <= 0;
-    const volOiScore = ((technical.volume?.score || 0) + (technical.oi?.score || 0)) / 2;
-    const w = INSTRUMENT_FACTOR_WEIGHTS.short;
-    const compositeScore = outlookPending
-      ? clamp(macroScore * 0.5, -1, 1)
-      : clamp(
-          macroScore * w.macro +
-            newsFactor.score * w.news +
-            technical.techScore * w.technical +
-            volOiScore * w.volumeOi,
-          -1,
-          1
-        );
+    const hasLivePrice = mergedQuote.price != null && !Number.isNaN(Number(mergedQuote.price));
+    const outlookPending = !hasLivePrice;
 
-    const horizons = buildInstrumentHorizons(macroScore, newsFactor, technical, spec.bucket);
-    if (outlookPending) {
-      for (const h of ['short', 'medium', 'long']) {
-        horizons[h].directionLabel = '研判积累中';
-        horizons[h].commentary = horizons[h].commentary || '宏观因子已接入，技术面与新闻待积累';
-      }
-    }
-    const nextDayRangePct = computeNextDayRangePct({
+    const volOiScore = ((technical.volume?.score || 0) + (technical.oi?.score || 0)) / 2;
+    const intradayScore = technical.intraday?.score || 0;
+    const w = INSTRUMENT_FACTOR_WEIGHTS.short;
+    const partialData = hasLivePrice && !technical.hasEnough;
+    const macroW = partialData ? w.macro * 1.15 : w.macro;
+    const newsW = partialData ? w.news * 1.1 : w.news;
+    const techW = partialData ? w.technical * 0.65 : w.technical;
+    const volOiW = partialData ? w.volumeOi * 0.5 : w.volumeOi;
+    const intradayW = partialData ? 0.22 : 0.1;
+    const compositeScore = clamp(
+      macroScore * macroW +
+        newsFactor.score * newsW +
+        technical.techScore * techW +
+        volOiScore * volOiW +
+        intradayScore * intradayW,
+      -1,
+      1
+    );
+
+    const horizons = buildInstrumentHorizons(macroScore, newsFactor, technical, spec.bucket, compositeScore);
+    const vix = parseVix(sources.fed);
+    const nextDayRangePct = outlookPending
+      ? null
+      : computeNextDayRangePct({
+          compositeScore,
+          historicalVol:
+            technical.historicalVol ||
+            (technical.volatilityProxy
+              ? {
+                  sigmaDaily20: technical.volatilityProxy,
+                  histVol20d: technical.volatilityProxy,
+                  atrPct14: technical.intraday?.atrProxyPct ?? technical.volatilityProxy * 1.2,
+                  absReturnP90: technical.volatilityProxy * 1.35,
+                }
+              : null),
+          newsFactor,
+          macroScore,
+          techScore: technical.techScore,
+          intradayChangePct: technical.intraday?.changePct ?? mergedQuote.changePct,
+          sector: spec.sector,
+          instrumentId: spec.id,
+          vix,
+        });
+
+    const confidence = computeInstrumentConfidence({
+      hasLivePrice,
+      hasEnough: technical.hasEnough,
+      dataPoints: technical.dataPoints,
+      newsHitCount: newsFactor.hitCount || 0,
+      oiDelta: technical.oi?.deltaPct,
+      volumeRatio: technical.volume?.ratio,
       compositeScore,
-      boll: technical.boll,
-      newsScore: newsFactor.score,
-      macroScore,
-      techScore: technical.techScore,
     });
 
     const bucketFactorScores = buildBucketFactorScores(sources, spec.bucket);
@@ -854,6 +1070,7 @@ function buildInstrumentOutlooks(sources) {
         confidence: newsFactor.confidence,
         summary: newsFactor.summary,
         weight: +newsFactor.weight.toFixed(2),
+        hitCount: newsFactor.hitCount || 0,
         hits: newsFactor.hits,
       },
       technical: {
@@ -868,9 +1085,9 @@ function buildInstrumentOutlooks(sources) {
     };
 
     const direction = scoreToDirection(compositeScore);
-    const dirLabel = outlookPending ? '研判积累中' : directionLabel(direction);
+    const dirLabel = directionLabel(direction);
     const rationale = outlookPending
-      ? `${meta.name}：${mergedQuote.price != null ? `现价 ${mergedQuote.price}` : '现价待加载'}；${mergedQuote.priceReason || '研判积累中'}`
+      ? `${meta.name}：现价待加载；${mergedQuote.priceReason || '行情未接入'}`
       : buildInstrumentRationale(meta, horizons, nextDayRangePct, factors, technical);
 
     return {
@@ -886,13 +1103,14 @@ function buildInstrumentOutlooks(sources) {
       changePct: mergedQuote.changePct,
       priceReason: mergedQuote.priceReason,
       outlookPending,
-      compositeScore: +compositeScore.toFixed(4),
+      compositeScore: +compositeScore.toFixed(2),
+      compositeScoreDisplay: `${compositeScore >= 0 ? '+' : ''}${compositeScore.toFixed(2)}`,
       direction,
       directionArrow: directionArrow(direction),
       directionLabel: dirLabel,
-      confidence: horizons.short.confidence,
-      stars: horizons.short.stars,
-      starsHtml: horizons.short.starsHtml,
+      confidence,
+      stars: confidence,
+      starsHtml: starsToHtml(confidence),
       nextDayRangePct,
       short: horizons.short,
       medium: horizons.medium,
@@ -929,7 +1147,7 @@ function buildCommodityOutlookFromSources(sources = {}) {
       categories,
       instruments,
       factors,
-      framework: { logicModel: '多因子+技术面（部分输入异常，已降级）', version: 'v1.16.1' },
+      framework: { logicModel: '多因子+技术面（部分输入异常，已降级）', version: 'v1.17.0' },
       sectors: OUTLOOK_SECTORS,
       stats: {
         categoryCount: categories.length,
@@ -965,13 +1183,14 @@ function buildCommodityOutlookFromSources(sources = {}) {
     factors,
     framework: {
       logicModel:
-        '宏观七因子 → 品种新闻加权 → 成交量/持仓/OIΔ → BOLL(20,2)+MA排列 → 合成评分 → 次日波动区间',
+        '宏观七因子 → 品种新闻加权 → 成交量/持仓/OIΔ → 20日实现波动+ATR → 合成评分 → 历史校准次日区间',
       horizons: HORIZON_LABELS,
       factorIds: FACTOR_DEFS.map((f) => f.id),
       instrumentIds: INSTRUMENT_REGISTRY.map((i) => i.id),
       sectors: OUTLOOK_SECTORS,
-      rangeFormula: 'nextDay.mid = 宏观×0.35+技术×0.25+新闻×0.2；区间 ± (BOLL带宽/2 + |新闻|×0.45)',
-      version: 'v1.16.1',
+      rangeFormula: '±min(σ×1.2,p90×0.85,板块上限)+高星新闻；mid=宏观/技术/新闻/盘中；贵金属au±1.2%',
+      sectorClassCaps: SECTOR_CLASS_MAX_PCT,
+      version: 'v1.17.0',
     },
     sectors: OUTLOOK_SECTORS,
     stats: {
@@ -1006,6 +1225,7 @@ function enrichSourcesForOutlook(sources = {}) {
 
 function fetchCommodityOutlookSource(sources) {
   const enriched = enrichSourcesForOutlook(sources);
+  triggerOutlookKlineBackfill().catch(() => {});
   const payload = buildCommodityOutlookFromSources(enriched);
   diskCache.write(OUTLOOK_DISK_KEY, { data: payload, savedAt: Date.now() });
   return payload;
@@ -1074,6 +1294,10 @@ module.exports = {
   getCachedCommodityOutlookSource,
   fetchCommodityOutlookLive,
   refreshCommodityOutlookInBackground,
+  triggerOutlookKlineBackfill,
+  computeNextDayRangePct,
+  getClassMaxPct,
+  SECTOR_CLASS_MAX_PCT,
   directionArrow,
   directionLabel,
   starsToHtml,
