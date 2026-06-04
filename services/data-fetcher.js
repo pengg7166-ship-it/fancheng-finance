@@ -7,6 +7,7 @@ const { fetchMacroSource, getCachedMacroSource } = require('./macro-fetcher');
 const { fetchForexSource, getCachedForexSource } = require('./forex-fetcher');
 const { fetchPolicySource, getCachedPolicySource } = require('./policy-fetcher');
 const { fetchGeopoliticsSource, getCachedGeopoliticsSource } = require('./geopolitics-fetcher');
+const { fetchClimateSource, getCachedClimateSource } = require('./climate-fetcher');
 const { fetchBojSource, getCachedBojSource, ensureBojPayloadLocalized } = require('./boj-fetcher');
 const { fetchFedSpeeches } = require('./cb-speeches');
 const { fetchFredBatch } = require('./fred-client');
@@ -153,6 +154,10 @@ const SOURCES = {
     name: '地缘政治',
     dataLabel: '全球地缘政治雷达 · 按区域与影响力追踪',
   },
+  climate: {
+    name: '天气气候',
+    dataLabel: '全球天气气候雷达 · 农业/矿山物流/宏观传导',
+  },
   boj: {
     name: '日本央行',
     dataLabel: '日本货币政策与核心指标（日本央行 · FRED · 新浪）',
@@ -253,9 +258,12 @@ function emptySource(key) {
     news: [],
     indicators: [],
     regions: key === 'indices' ? [] : undefined,
-    groups: key === 'macro' || key === 'forex' || key === 'policy' || key === 'geopolitics' ? [] : undefined,
+    groups:
+      key === 'macro' || key === 'forex' || key === 'policy' || key === 'geopolitics' || key === 'climate'
+        ? []
+        : undefined,
     pairs: key === 'forex' ? [] : undefined,
-    items: key === 'policy' || key === 'geopolitics' ? [] : undefined,
+    items: key === 'policy' || key === 'geopolitics' || key === 'climate' ? [] : undefined,
     dataLabel: SOURCES[key].dataLabel,
     updatedAt: new Date().toISOString(),
   };
@@ -273,7 +281,9 @@ async function fetchSourceWithTimeout(key, options = {}) {
             ? 30000
             : key === 'geopolitics'
               ? 35000
-              : key === 'fed' || key === 'boj'
+              : key === 'climate'
+                ? 35000
+                : key === 'fed' || key === 'boj'
               ? 25000
               : SOURCE_TIMEOUT_MS;
   return Promise.race([
@@ -343,6 +353,15 @@ async function fetchSource(key, options = {}) {
     return fetchGeopoliticsSource();
   }
 
+  if (key === 'climate') {
+    const cached = !options.force ? getCachedClimateSource() : null;
+    if (cached?.items?.length) {
+      fetchClimateSource().catch(() => {});
+      return { ...cached, fromCache: true };
+    }
+    return fetchClimateSource();
+  }
+
   if (key === 'boj') {
     const cached = !options.force ? getCachedBojSource() : null;
     if (cached?.indicators?.length || cached?.news?.length) {
@@ -376,7 +395,7 @@ async function fetchSource(key, options = {}) {
 }
 
 async function refreshAllData() {
-  const keys = ['indices', 'macro', 'forex', 'policy', 'geopolitics', 'fed', 'treasury', 'boj', 'xinhua'];
+  const keys = ['indices', 'macro', 'forex', 'policy', 'geopolitics', 'climate', 'fed', 'treasury', 'boj', 'xinhua'];
   const results = await Promise.allSettled(keys.map((key) => fetchSourceWithTimeout(key)));
 
   const sources = {};
@@ -394,9 +413,12 @@ async function refreshAllData() {
         news: [],
         indicators: [],
         regions: key === 'indices' ? [] : undefined,
-    groups: key === 'macro' || key === 'forex' || key === 'policy' || key === 'geopolitics' ? [] : undefined,
+    groups:
+      key === 'macro' || key === 'forex' || key === 'policy' || key === 'geopolitics' || key === 'climate'
+        ? []
+        : undefined,
     pairs: key === 'forex' ? [] : undefined,
-    items: key === 'policy' || key === 'geopolitics' ? [] : undefined,
+    items: key === 'policy' || key === 'geopolitics' || key === 'climate' ? [] : undefined,
         dataLabel: SOURCES[key].dataLabel,
         updatedAt: new Date().toISOString(),
         error: localizeErrorMessage(result.reason?.message),
@@ -497,6 +519,7 @@ async function fetchAllData({ force = false, fast = false } = {}) {
         forex: emptySource('forex'),
         policy: emptySource('policy'),
         geopolitics: emptySource('geopolitics'),
+        climate: emptySource('climate'),
         boj: emptySource('boj'),
       },
       errors: indexErrors,

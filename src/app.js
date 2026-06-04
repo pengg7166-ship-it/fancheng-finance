@@ -1,4 +1,4 @@
-const TAB_KEYS = ['indices', 'commodities', 'macro', 'forex', 'policy', 'geopolitics', 'fed', 'boj', 'treasury', 'xinhua'];
+const TAB_KEYS = ['indices', 'commodities', 'macro', 'forex', 'policy', 'geopolitics', 'climate', 'fed', 'boj', 'treasury', 'xinhua'];
 const TAB_LABELS = {
   indices: '全球指数',
   commodities: '大宗商品',
@@ -6,6 +6,7 @@ const TAB_LABELS = {
   forex: '外汇',
   policy: '政策雷达',
   geopolitics: '地缘政治',
+  climate: '天气气候',
   fed: '美联储',
   boj: '日本央行',
   treasury: '美国财政部',
@@ -18,6 +19,7 @@ const DOT_CLASS = {
   forex: 'dot-forex',
   policy: 'dot-policy',
   geopolitics: 'dot-geopolitics',
+  climate: 'dot-climate',
   fed: 'dot-fed',
   boj: 'dot-boj',
   treasury: 'dot-treasury',
@@ -56,6 +58,11 @@ let geoFilterCountry = 'all';
 let geoMinStars = 0;
 let geoViewMode = 'all';
 let geoLiveTimer = null;
+let climateFilterRegion = 'all';
+let climateFilterCategory = 'all';
+let climateMinStars = 0;
+let climateViewMode = 'all';
+let climateLiveTimer = null;
 let policyCommodityNewsLoading = null;
 
 const POLICY_EXCHANGE_LABELS = {
@@ -1626,6 +1633,10 @@ function scrollPolicyCommodityZone(panel, { switchView = true } = {}) {
 }
 
 function jumpPolicyCommodityFromGeo(commodityId) {
+  jumpPolicyCommodityFromClimate(commodityId);
+}
+
+function jumpPolicyCommodityFromClimate(commodityId) {
   const id = commodityId;
   if (!id) return;
   switchTab('policy');
@@ -1666,6 +1677,31 @@ function patchPolicyCommodityIntelFromGeo(source) {
     ...prev,
     catalog: catalog.length ? catalog : prev.catalog,
     geoFeeds: { ...(prev.geoFeeds || {}), ...geoFeeds },
+    updatedAt: linkage.updatedAt || prev.updatedAt,
+  };
+}
+
+function patchPolicyCommodityIntelFromClimate(source) {
+  if (!source?.commodityLinkage?.feeds) return;
+  const linkage = source.commodityLinkage;
+  const climateFeeds = Object.fromEntries(
+    Object.entries(linkage.feeds).map(([id, feed]) => [
+      id,
+      { climateNews: (feed.climateNews || []).slice(0, 8) },
+    ])
+  );
+  const prev = window.__policyCommodityIntel || {};
+  const catalogById = new Map((linkage.topCommodities || []).map((c) => [normCommodityId(c.id), c]));
+  const catalog = (prev.catalog || []).map((c) => {
+    const linked = catalogById.get(normCommodityId(c.id));
+    return linked
+      ? { ...c, climateNewsCount: linked.climateNewsCount ?? c.climateNewsCount }
+      : c;
+  });
+  window.__policyCommodityIntel = {
+    ...prev,
+    catalog: catalog.length ? catalog : prev.catalog,
+    climateFeeds: { ...(prev.climateFeeds || {}), ...climateFeeds },
     updatedAt: linkage.updatedAt || prev.updatedAt,
   };
 }
@@ -2034,6 +2070,243 @@ function refreshGeopoliticsPanelSections(panel, source) {
   }
 }
 
+function filterBaseClimateItems(items) {
+  let list = items || [];
+  if (climateFilterRegion !== 'all') {
+    list = list.filter((i) => i.region === climateFilterRegion);
+  }
+  if (climateFilterCategory !== 'all') {
+    list = list.filter(
+      (i) =>
+        i.primaryCategoryId === climateFilterCategory ||
+        i.dimensions?.some((d) => d.id === climateFilterCategory)
+    );
+  }
+  if (climateMinStars >= 3) list = list.filter((i) => (i.stars || 0) >= climateMinStars);
+  if (climateViewMode === 'high') list = list.filter((i) => (i.stars || 0) >= 4);
+  return list;
+}
+
+function renderClimateFrameworkBar(source) {
+  const dims = source.framework?.dimensions || source.catalog?.dimensions || [];
+  if (!dims.length) return '';
+  const allCount = (source.items || []).length;
+  const chips = [
+    `<button type="button" class="climate-dimension-btn ${climateFilterCategory === 'all' ? 'active' : ''}" data-climate-category="all">传导全部 <span>${allCount}</span></button>`,
+    ...dims.map((d) => {
+      const active = climateFilterCategory === d.id;
+      return `<button type="button" class="climate-dimension-btn climate-dim-${d.id} ${active ? 'active' : ''}" data-climate-category="${escapeAttr(d.id)}" title="${escapeAttr(d.description || '')}">${d.icon} ${escapeHtml(d.shortLabel || d.label)} <span>${d.count || 0}</span></button>`;
+    }),
+  ];
+  return `<div class="climate-framework-bar geo-framework-bar">
+    <p class="climate-framework-intro geo-framework-intro">${escapeHtml(source.framework?.logicModel || '气候事件 → 传导 → 品种')}</p>
+    <div class="climate-dimension-list geo-dimension-list">${chips.join('')}</div>
+  </div>`;
+}
+
+function renderClimateAnalysisBlock(analysis) {
+  if (!analysis) return '';
+  const chain = (analysis.logicChain || [])
+    .map(
+      (c) =>
+        `<li class="climate-logic-step"><span class="climate-logic-label">${escapeHtml(c.label)}</span>${escapeHtml(c.text)}</li>`
+    )
+    .join('');
+  return `<div class="climate-analysis-block">
+    ${chain ? `<ol class="climate-logic-chain">${chain}</ol>` : ''}
+    ${analysis.transmission ? `<p class="climate-transmission"><strong>传导：</strong>${escapeHtml(analysis.transmission)}</p>` : ''}
+    ${analysis.impactLine ? `<p class="climate-impact-line geo-impact-line"><strong>品种：</strong>${escapeHtml(analysis.impactLine)}</p>` : ''}
+  </div>`;
+}
+
+function renderClimateStatsInline(stats, items) {
+  const s = stats || {};
+  const total = s.total ?? items?.length ?? 0;
+  const high = s.highImpact ?? items?.filter((i) => i.stars >= 4).length ?? 0;
+  const linked = s.commodityLinked ?? items?.filter((i) => i.commodityLinked).length ?? 0;
+  return `<div class="policy-stats-inline climate-stats-inline">
+    <span>追踪 <b>${total}</b> 条</span>
+    <span>高影响 <b>${high}</b></span>
+    <span>大宗关联 <b>${linked}</b></span>
+  </div>`;
+}
+
+function renderClimateRegionBar() {
+  const regions = [
+    { id: 'all', label: '全部', flag: '🌐' },
+    { id: 'domestic', label: '国内', flag: '🇨🇳' },
+    { id: 'international', label: '国际', flag: '🌍' },
+    { id: 'asia', label: '亚洲', flag: '🌏' },
+    { id: 'americas', label: '美洲', flag: '🌎' },
+    { id: 'europe', label: '欧洲', flag: '🇪🇺' },
+    { id: 'global', label: '全球', flag: '🔗' },
+  ];
+  return regions
+    .map(
+      (r) =>
+        `<button type="button" class="policy-region-btn climate-region-btn ${climateFilterRegion === r.id ? 'active' : ''}" data-climate-region="${r.id}">${r.flag} ${r.label}</button>`
+    )
+    .join('');
+}
+
+function renderClimateViewTabs(source) {
+  const items = source.items || [];
+  const allCount = filterBaseClimateItems(items).length;
+  const highCount = filterBaseClimateItems(items).filter((i) => i.stars >= 4).length;
+  const tabs = [
+    { id: 'all', label: '全部动态', count: allCount },
+    { id: 'high', label: '高影响 ≥4星', count: highCount },
+  ];
+  return tabs
+    .map(
+      (t) =>
+        `<button type="button" class="policy-view-tab climate-view-tab ${climateViewMode === t.id ? 'active' : ''}" data-climate-view="${t.id}">${t.label}<span class="cb-tab-count">${t.count}</span></button>`
+    )
+    .join('');
+}
+
+function renderClimateReadingCard(item, index) {
+  const n = Math.max(1, Math.min(5, item.stars || 1));
+  const dateStr = item.pubDate ? formatDate(item.pubDate) : '';
+  const shortDate = dateStr.includes(' ') ? dateStr.split(' ')[0] : dateStr;
+  const dimTags = (item.dimensions || [])
+    .slice(0, 3)
+    .map(
+      (d) =>
+        `<span class="climate-dim-tag climate-dim-tag-${d.id} geo-dim-tag">${d.icon || ''} ${escapeHtml(d.shortLabel || d.label)}</span>`
+    )
+    .join('');
+  const eventTags = (item.eventTypes || [])
+    .map((e) => `<span class="policy-tag climate-event-tag">${escapeHtml(e.label)}</span>`)
+    .join('');
+  const commodityTags = (item.commodities || [])
+    .slice(0, 5)
+    .map(
+      (c) =>
+        `<button type="button" class="climate-commodity-tag geo-commodity-tag policy-tag policy-tag-commodity" data-commodity-id="${escapeAttr(c.id)}" title="跳转政策雷达·大宗关联">${escapeHtml(c.name)}</button>`
+    )
+    .join('');
+  const dirClass =
+    item.direction === 'bullish'
+      ? 'climate-direction-bullish'
+      : item.direction === 'bearish'
+        ? 'climate-direction-bearish'
+        : '';
+
+  return `<article class="policy-reading-row climate-reading-row policy-card-stars-${n}" data-climate-id="${escapeAttr(item.id)}" data-link="${escapeAttr(item.link)}" data-stars="${n}">
+    <span class="reading-row-idx">${index}</span>
+    <time class="reading-row-date">${escapeHtml(shortDate)}</time>
+    <div class="policy-reading-main">
+      <div class="policy-reading-meta">
+        ${renderGeoNewsStars(item.stars)}
+        <span class="climate-region-pill">${escapeHtml(item.regionFlag || '')} ${escapeHtml(item.regionLabel || '全球')}</span>
+        ${item.eventTypeLabel ? `<span class="policy-tag climate-event-tag">${escapeHtml(item.eventTypeLabel)}</span>` : ''}
+        ${item.directionLabel ? `<span class="policy-tag ${dirClass}" title="影响方向">${escapeHtml(item.directionLabel)}</span>` : ''}
+        ${dimTags ? `<span class="climate-dim-inline">${dimTags}</span>` : ''}
+        ${item.analysis ? '<span class="reading-row-badge climate-badge-analysis">传导分析</span>' : ''}
+      </div>
+      <h3 class="policy-reading-row-title">${escapeHtml(item.title)}</h3>
+      ${item.summary ? `<p class="policy-reading-summary">${escapeHtml(item.summary)}</p>` : ''}
+      ${item.analysis ? renderClimateAnalysisBlock(item.analysis) : ''}
+      ${commodityTags ? `<div class="climate-commodity-tags policy-tags">${commodityTags}</div>` : ''}
+      ${eventTags ? `<div class="policy-tags">${eventTags}</div>` : ''}
+      <p class="climate-source-line geo-source-line">${escapeHtml(item.sourceName || '来源未知')}</p>
+    </div>
+    <span class="reading-row-action" aria-hidden="true">↗</span>
+  </article>`;
+}
+
+function renderClimateReadingList(items) {
+  if (!items.length) {
+    return '<div class="empty-state policy-feed-empty">当前筛选条件下暂无气候动态</div>';
+  }
+  return `<div class="policy-reading-list climate-reading-list">${items.map((item, i) => renderClimateReadingCard(item, i + 1)).join('')}</div>`;
+}
+
+function renderClimatePanel(source) {
+  const hasData = source.items?.length;
+  const liveTag = source.liveRefreshedAt
+    ? `<span class="policy-live-tag policy-live-badge climate-live-tag"><span class="policy-live-dot"></span>实时 ${formatDate(source.liveRefreshedAt)}</span>`
+    : '';
+
+  if (!hasData) {
+    return `<div class="panel ${activeTab === 'climate' ? 'active' : ''}" id="panel-climate" role="tabpanel">
+      <div class="empty-state">正在加载天气气候数据…</div>
+    </div>`;
+  }
+
+  window.__climateCacheItems = source.items;
+  window.__climateCacheStats = source.stats;
+  window.__climateCacheFramework = source.framework;
+
+  const filtered = filterBaseClimateItems(source.items).sort((a, b) => {
+    const starDiff = (b.stars || 0) - (a.stars || 0);
+    if (starDiff !== 0) return starDiff;
+    return new Date(b.pubDate || 0) - new Date(a.pubDate || 0);
+  });
+
+  return `<div class="panel ${activeTab === 'climate' ? 'active' : ''}" id="panel-climate" role="tabpanel">
+    <div class="policy-panel policy-reading-v2 climate-panel">
+      <header class="policy-reading-head">
+        <div class="policy-reading-head-main">
+          <h2 class="policy-reading-title">${escapeHtml(source.dataLabel || '天气气候')}</h2>
+          ${renderClimateStatsInline(source.stats, source.items)}
+        </div>
+        ${liveTag}
+      </header>
+      ${renderClimateFrameworkBar(source)}
+      <div class="policy-reading-toolbar">
+        <div class="policy-toolbar-row">
+          <div class="policy-region-bar climate-region-bar">${renderClimateRegionBar()}</div>
+          <div class="policy-filter-group">
+            <button type="button" class="policy-filter-btn climate-filter-btn ${climateMinStars >= 3 ? 'active' : ''}" data-climate-filter="stars3">≥3 星</button>
+            <button type="button" class="policy-filter-btn climate-filter-btn ${climateMinStars >= 4 ? 'active' : ''}" data-climate-filter="stars4">≥4 星</button>
+          </div>
+        </div>
+      </div>
+      <div class="policy-view-tabs climate-view-tabs">${renderClimateViewTabs(source)}</div>
+      <div class="policy-reading-scroll climate-reading-scroll">${renderClimateReadingList(filtered)}</div>
+      <p class="policy-note climate-note">农业 · 矿山物流 · 宏观政经｜逻辑链：气候事件→传导→大宗商品｜品种标签可跳转政策雷达大宗专区</p>
+    </div>
+  </div>`;
+}
+
+function refreshClimatePanelSections(panel, source) {
+  if (!panel) return;
+  const data = source || {
+    items: window.__climateCacheItems || [],
+    stats: window.__climateCacheStats,
+    framework: window.__climateCacheFramework,
+  };
+  const headMain = panel.querySelector('.policy-reading-head-main');
+  if (headMain) {
+    const statsEl = headMain.querySelector('.climate-stats-inline');
+    if (statsEl) statsEl.outerHTML = renderClimateStatsInline(data.stats, data.items);
+  }
+  const frameworkBar = panel.querySelector('.climate-framework-bar');
+  if (frameworkBar) {
+    frameworkBar.outerHTML = renderClimateFrameworkBar(data);
+  } else {
+    panel.querySelector('.policy-reading-head')?.insertAdjacentHTML(
+      'afterend',
+      renderClimateFrameworkBar(data)
+    );
+  }
+  const regionBar = panel.querySelector('.climate-region-bar');
+  if (regionBar) regionBar.innerHTML = renderClimateRegionBar();
+  const viewTabs = panel.querySelector('.climate-view-tabs');
+  if (viewTabs) viewTabs.innerHTML = renderClimateViewTabs(data);
+  const scroll = panel.querySelector('.climate-reading-scroll');
+  if (scroll) {
+    const filtered = filterBaseClimateItems(data.items || []).sort((a, b) => {
+      const starDiff = (b.stars || 0) - (a.stars || 0);
+      if (starDiff !== 0) return starDiff;
+      return new Date(b.pubDate || 0) - new Date(a.pubDate || 0);
+    });
+    scroll.innerHTML = renderClimateReadingList(filtered);
+  }
+}
+
 function renderPolicyPanel(source) {
   const hasData = source.items?.length;
   const liveTag = source.liveRefreshedAt
@@ -2165,6 +2438,11 @@ function renderPanel(key, source) {
     window.__geoCacheCatalog = source.catalog;
     window.__geoCountryIndex = source.countryIndex;
   }
+  if (key === 'climate' && source?.items) {
+    window.__climateCacheItems = source.items;
+    window.__climateCacheStats = source.stats;
+    window.__climateCacheFramework = source.framework;
+  }
   if (key === 'indices') return renderIndicesPanel(source);
   if (key === 'commodities') return window.CommoditiesUI.renderPanelShell(activeTab);
 
@@ -2186,6 +2464,7 @@ function renderPanel(key, source) {
   if (key === 'forex') return renderForexPanel(source);
   if (key === 'policy') return renderPolicyPanel(source);
   if (key === 'geopolitics') return renderGeopoliticsPanel(source);
+  if (key === 'climate') return renderClimatePanel(source);
 
   if (key === 'boj') {
     return renderCentralBankPanel('boj', source);
@@ -2248,6 +2527,7 @@ function renderAll(data) {
   setupHistorySection();
   setupPolicyPanel();
   setupGeopoliticsPanel();
+  setupClimatePanel();
   setupCentralBankPanel('fed');
   setupCentralBankPanel('boj');
   if (!savedCommodities && TAB_KEYS.includes('commodities') && window.CommoditiesUI?.ensureInit) {
@@ -2452,6 +2732,7 @@ function emptySources() {
     forex: { news: [], indicators: [], groups: [], pairs: [], dataLabel: '美元指数与主要货币对实时汇率' },
     policy: { news: [], indicators: [], groups: [], items: [], dataLabel: '中美部委政策与产业影响雷达' },
     geopolitics: { news: [], indicators: [], items: [], dataLabel: '全球地缘政治与四维竞争雷达' },
+    climate: { news: [], indicators: [], items: [], dataLabel: '全球天气气候与大宗传导雷达' },
     fed: { news: [], indicators: [], dataLabel: '关键经济指标（圣路易斯联储）' },
     boj: { news: [], indicators: [], dataLabel: '日本货币政策与核心指标（日本央行 · FRED · 新浪）' },
     treasury: { news: [], indicators: [], dataLabel: '国债与汇率参考' },
@@ -3021,6 +3302,118 @@ function setupGeopoliticsPanel() {
   });
 }
 
+function stopClimateLiveTimer() {
+  if (climateLiveTimer) clearInterval(climateLiveTimer);
+  climateLiveTimer = null;
+}
+
+function startClimateLiveTimer() {
+  stopClimateLiveTimer();
+  if (activeTab !== 'climate') return;
+  refreshClimateLive();
+  climateLiveTimer = setInterval(refreshClimateLive, policyRefreshMs);
+}
+
+function applyClimateLiveData(source) {
+  const panel = document.getElementById('panel-climate');
+  if (!source?.items?.length) return;
+
+  window.__climateCacheItems = source.items;
+  window.__climateCacheStats = source.stats;
+  window.__climateCacheFramework = source.framework;
+  patchPolicyCommodityIntelFromClimate(source);
+
+  if (panel) refreshClimatePanelSections(panel, source);
+
+  const stamp = source.liveRefreshedAt || source.updatedAt;
+  const liveTag = panel?.querySelector('.climate-live-tag');
+  if (liveTag && stamp) {
+    liveTag.innerHTML = `<span class="policy-live-dot"></span>实时 ${formatDate(stamp)}`;
+  }
+
+  if (activeTab === 'climate' && stamp) {
+    $('#lastUpdated').textContent = `气候实时 ${formatDate(stamp)}`;
+  }
+
+  if (activeTab === 'policy' && policyViewMode === 'commodity') {
+    const policyPanel = document.getElementById('panel-policy');
+    if (policyPanel) {
+      refreshPolicyPanelSections(policyPanel, {
+        items: window.__policyCacheItems || [],
+        groups: window.__policyCacheGroups || [],
+        stats: window.__policyCacheStats,
+        commodityIntel: window.__policyCommodityIntel,
+      });
+    }
+  }
+}
+
+async function refreshClimateLive() {
+  if (!window.fancheng?.fetchClimateLive) return;
+  try {
+    const climate = await window.fancheng.fetchClimateLive({ force: true });
+    if (climate?.error || !climate?.items?.length) return;
+    applyClimateLiveData(climate);
+  } catch {
+    // 静默
+  }
+}
+
+function setupClimatePanel() {
+  const panel = document.getElementById('panel-climate');
+  if (!panel || panel.dataset.climateBound === '1') return;
+  panel.dataset.climateBound = '1';
+
+  panel.addEventListener('click', (e) => {
+    const regionBtn = e.target.closest('[data-climate-region]');
+    if (regionBtn) {
+      climateFilterRegion = regionBtn.dataset.climateRegion || 'all';
+      refreshClimatePanelSections(panel);
+      return;
+    }
+
+    const catBtn = e.target.closest('[data-climate-category]');
+    if (catBtn) {
+      climateFilterCategory = catBtn.dataset.climateCategory || 'all';
+      refreshClimatePanelSections(panel);
+      return;
+    }
+
+    const filterBtn = e.target.closest('[data-climate-filter]');
+    if (filterBtn) {
+      const filter = filterBtn.dataset.climateFilter;
+      if (filter === 'stars3') climateMinStars = climateMinStars >= 3 ? 0 : 3;
+      else if (filter === 'stars4') climateMinStars = climateMinStars >= 4 ? 0 : 4;
+      panel.querySelectorAll('[data-climate-filter]').forEach((b) => {
+        const f = b.dataset.climateFilter;
+        b.classList.toggle(
+          'active',
+          (f === 'stars3' && climateMinStars >= 3) || (f === 'stars4' && climateMinStars >= 4)
+        );
+      });
+      refreshClimatePanelSections(panel);
+      return;
+    }
+
+    const viewBtn = e.target.closest('[data-climate-view]');
+    if (viewBtn) {
+      climateViewMode = viewBtn.dataset.climateView || 'all';
+      refreshClimatePanelSections(panel);
+      return;
+    }
+
+    const commodityTag = e.target.closest('.climate-commodity-tag');
+    if (commodityTag) {
+      e.stopPropagation();
+      jumpPolicyCommodityFromClimate(commodityTag.dataset.commodityId);
+      return;
+    }
+
+    const row = e.target.closest('.climate-reading-row');
+    if (row?.dataset.link) window.fancheng.openExternal(row.dataset.link);
+  });
+}
+
 function stopForexLiveTimer() {
   if (forexLiveTimer) clearInterval(forexLiveTimer);
   forexLiveTimer = null;
@@ -3042,6 +3435,7 @@ function startAutoRefresh() {
   startForexLiveTimer();
   startPolicyLiveTimer();
   startGeopoliticsLiveTimer();
+  startClimateLiveTimer();
 }
 
 function switchTab(key) {
@@ -3056,6 +3450,7 @@ function switchTab(key) {
       panels.insertAdjacentHTML('beforeend', placeholder);
       panel = document.getElementById(`panel-${key}`);
       if (key === 'geopolitics') setupGeopoliticsPanel();
+      if (key === 'climate') setupClimatePanel();
       if (key === 'policy') setupPolicyPanel();
     }
   }
@@ -3067,6 +3462,7 @@ function switchTab(key) {
     key === 'forex' ||
     key === 'policy' ||
     key === 'geopolitics' ||
+    key === 'climate' ||
     key === 'fed' ||
     key === 'boj';
   $('#liveBadge')?.classList.toggle('hidden', !showLive);
@@ -3075,6 +3471,7 @@ function switchTab(key) {
   stopForexLiveTimer();
   stopPolicyLiveTimer();
   stopGeopoliticsLiveTimer();
+  stopClimateLiveTimer();
   stopFedLiveTimer();
   stopBojLiveTimer();
   if (key === 'forex') startForexLiveTimer();
@@ -3096,6 +3493,11 @@ function switchTab(key) {
     startGeopoliticsLiveTimer();
     const panel = document.getElementById('panel-geopolitics');
     if (panel) refreshGeopoliticsPanelSections(panel);
+  }
+  if (key === 'climate') {
+    startClimateLiveTimer();
+    const panel = document.getElementById('panel-climate');
+    if (panel) refreshClimatePanelSections(panel);
   }
   if (key === 'fed') {
     startFedLiveTimer();
@@ -3633,6 +4035,28 @@ async function bootstrapApp() {
       });
     }
 
+    if (window.fancheng.onClimateLive) {
+      window.fancheng.onClimateLive((climate) => {
+        if (!climate?.items?.length) return;
+        window.__climateCacheItems = climate.items;
+        window.__climateCacheStats = climate.stats;
+        window.__climateCacheFramework = climate.framework;
+        patchPolicyCommodityIntelFromClimate(climate);
+        if (activeTab === 'climate') applyClimateLiveData(climate);
+        else if (activeTab === 'policy' && policyViewMode === 'commodity') {
+          const policyPanel = document.getElementById('panel-policy');
+          if (policyPanel) {
+            refreshPolicyPanelSections(policyPanel, {
+              items: window.__policyCacheItems || [],
+              groups: window.__policyCacheGroups || [],
+              stats: window.__policyCacheStats,
+              commodityIntel: window.__policyCommodityIntel,
+            });
+          }
+        }
+      });
+    }
+
     if (window.fancheng.onFedLive) {
       window.fancheng.onFedLive((fed) => {
         if (!hasCentralBankLivePayload(fed)) return;
@@ -3670,6 +4094,10 @@ async function bootstrapApp() {
         if (activeTab === 'geopolitics' && data.sources?.geopolitics?.items?.length) {
           window.__geoCacheItems = data.sources.geopolitics.items;
           applyGeopoliticsLiveData(data.sources.geopolitics);
+        }
+        if (activeTab === 'climate' && data.sources?.climate?.items?.length) {
+          window.__climateCacheItems = data.sources.climate.items;
+          applyClimateLiveData(data.sources.climate);
         }
         if (activeTab === 'fed' && hasCentralBankLivePayload(data.sources?.fed)) {
           applyFedLiveData(data.sources.fed);

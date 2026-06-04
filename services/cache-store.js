@@ -11,6 +11,7 @@ const {
   refreshPolicyLiveInBackground,
 } = require('./policy-fetcher');
 const { getCachedBojSource, fetchBojSource, refreshBojInBackground, ensureBojPayloadLocalized } = require('./boj-fetcher');
+const { fetchClimateSource, refreshClimateInBackground } = require('./climate-fetcher');
 const { getCachedFedSpeeches } = require('./cb-speeches');
 const { getCachedFedIndicators } = require('./fed-indicators-fetcher');
 const { refreshFedInBackground } = require('./data-fetcher');
@@ -164,6 +165,8 @@ function prefetchAfterStartup() {
   setTimeout(() => fetchMacroSource().catch(() => {}), 6000);
   setTimeout(() => fetchForexSource().catch(() => {}), 8000);
   setTimeout(() => fetchPolicySource().catch(() => {}), 10000);
+  setTimeout(() => fetchClimateSource().catch(() => {}), 11000);
+  setInterval(() => refreshClimateInBackground(), 30 * 1000);
   setTimeout(() => refreshFedInBackground(), 4000);
   setTimeout(() => fetchBojSource().catch(() => {}), 5000);
   setInterval(() => refreshForexLiveInBackground(), 15 * 1000);

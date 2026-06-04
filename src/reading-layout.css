@@ -921,3 +921,92 @@
 .geo-dim-inline .geo-dim-tag {
   font-size: 10px;
 }
+
+/* —— 天气气候 —— */
+.climate-panel .policy-reading-title {
+  color: var(--climate, #22d3ee);
+}
+
+.climate-live-tag .policy-live-dot {
+  background: var(--climate, #22d3ee);
+}
+
+.climate-region-pill {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(34, 211, 238, 0.15);
+  color: #a5f3fc;
+}
+
+.climate-event-tag {
+  background: rgba(14, 165, 233, 0.18);
+  color: #7dd3fc;
+}
+
+.climate-dim-tag-agriculture {
+  border-color: rgba(132, 204, 22, 0.35);
+  color: #bef264;
+}
+
+.climate-dim-tag-mining_logistics {
+  border-color: rgba(245, 158, 11, 0.35);
+  color: #fcd34d;
+}
+
+.climate-dim-tag-macro {
+  border-color: rgba(56, 189, 248, 0.35);
+  color: #7dd3fc;
+}
+
+.climate-commodity-tags .climate-commodity-tag {
+  font-weight: 600;
+  border-color: rgba(34, 211, 238, 0.45);
+  background: rgba(34, 211, 238, 0.12);
+  color: #a5f3fc;
+}
+
+.climate-analysis-block {
+  margin: 10px 0 0;
+  padding: 10px 12px;
+  border-left: 3px solid var(--climate, #22d3ee);
+  background: rgba(34, 211, 238, 0.06);
+  border-radius: 0 8px 8px 0;
+  font-size: 12px;
+  line-height: 1.65;
+  color: #cbd5e1;
+}
+
+.climate-logic-chain {
+  margin: 8px 0 0;
+  padding-left: 18px;
+}
+
+.climate-logic-step {
+  margin-bottom: 6px;
+}
+
+.climate-logic-label {
+  display: inline-block;
+  min-width: 2.5em;
+  font-weight: 600;
+  color: #67e8f9;
+  margin-right: 6px;
+}
+
+.climate-badge-analysis {
+  background: rgba(34, 211, 238, 0.25);
+  color: #cffafe;
+}
+
+.climate-direction-bullish {
+  color: #4ade80;
+}
+
+.climate-direction-bearish {
+  color: #f87171;
+}
+
+.climate-note {
+  color: #64748b;
+}

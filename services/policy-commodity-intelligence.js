@@ -61,9 +61,38 @@ function initCommodityBuckets() {
       cnNews: [],
       globalNews: [],
       geoNews: [],
+      climateNews: [],
     });
   }
   return buckets;
+}
+
+function tagClimateItemForCommodities(climateItem) {
+  const tags = climateItem.commodities?.length
+    ? climateItem.commodities
+    : detectCommodityTags(
+        `${climateItem.title || ''} ${climateItem.summary || ''} ${climateItem.commodityImpactSummary || climateItem.analysis?.impactLine || ''}`
+      );
+  if (!tags.length) return [];
+
+  const text = `${climateItem.title || ''} ${climateItem.summary || ''}`;
+  const relevance =
+    (climateItem.stars || 1) +
+    (climateItem.commodities?.length ? 2 : 0) +
+    (climateItem.analysis ? 2 : 0);
+
+  return tags.map((tag) => ({
+    commodityId: tag.id,
+    commodityName: tag.name,
+    relevance,
+    item: {
+      ...climateItem,
+      intelType: 'climate',
+      relevance,
+      direction: climateItem.direction || detectImpactDirection(text),
+      impactSummary: climateItem.commodityImpactSummary || climateItem.analysis?.impactLine || '',
+    },
+  }));
 }
 
 function tagGeoItemForCommodities(geoItem) {
@@ -92,7 +121,13 @@ function tagGeoItemForCommodities(geoItem) {
   }));
 }
 
-function buildCommodityIntelligence(policyItems, fastPool = [], globalPool = [], geoItems = []) {
+function buildCommodityIntelligence(
+  policyItems,
+  fastPool = [],
+  globalPool = [],
+  geoItems = [],
+  climateItems = []
+) {
   const buckets = initCommodityBuckets();
 
   for (const policy of policyItems || []) {
@@ -132,6 +167,15 @@ function buildCommodityIntelligence(policyItems, fastPool = [], globalPool = [],
     }
   }
 
+  for (const climate of climateItems || []) {
+    const tagged = tagClimateItemForCommodities(climate);
+    for (const { commodityId, relevance, item } of tagged) {
+      if (relevance < 2) continue;
+      const bucket = buckets.get(normalizeCommodityId(commodityId));
+      if (bucket) bucket.climateNews.push(item);
+    }
+  }
+
   const catalog = [];
   const feeds = {};
 
@@ -150,9 +194,16 @@ function buildCommodityIntelligence(policyItems, fastPool = [], globalPool = [],
     bucket.geoNews = dedupeByLink(bucket.geoNews)
       .sort((a, b) => (b.stars || 0) - (a.stars || 0) || sortByDateDesc(a, b))
       .slice(0, 12);
+    bucket.climateNews = dedupeByLink(bucket.climateNews)
+      .sort((a, b) => (b.stars || 0) - (a.stars || 0) || sortByDateDesc(a, b))
+      .slice(0, 12);
 
     const totalCount =
-      bucket.policies.length + bucket.cnNews.length + bucket.globalNews.length + bucket.geoNews.length;
+      bucket.policies.length +
+      bucket.cnNews.length +
+      bucket.globalNews.length +
+      bucket.geoNews.length +
+      bucket.climateNews.length;
 
     catalog.push({
       id: bucket.id,
@@ -164,6 +215,7 @@ function buildCommodityIntelligence(policyItems, fastPool = [], globalPool = [],
       cnNewsCount: bucket.cnNews.length,
       globalNewsCount: bucket.globalNews.length,
       geoNewsCount: bucket.geoNews.length,
+      climateNewsCount: bucket.climateNews.length,
       totalCount,
     });
 
@@ -172,11 +224,13 @@ function buildCommodityIntelligence(policyItems, fastPool = [], globalPool = [],
       cnNews: bucket.cnNews,
       globalNews: bucket.globalNews,
       geoNews: bucket.geoNews,
+      climateNews: bucket.climateNews,
       counts: {
         policies: bucket.policies.length,
         cnNews: bucket.cnNews.length,
         globalNews: bucket.globalNews.length,
         geoNews: bucket.geoNews.length,
+        climateNews: bucket.climateNews.length,
         total: totalCount,
       },
     };
@@ -194,6 +248,7 @@ function buildCommodityIntelligence(policyItems, fastPool = [], globalPool = [],
     totalCnNews: catalog.reduce((s, c) => s + c.cnNewsCount, 0),
     totalGlobalNews: catalog.reduce((s, c) => s + c.globalNewsCount, 0),
     totalGeoNews: catalog.reduce((s, c) => s + c.geoNewsCount, 0),
+    totalClimateNews: catalog.reduce((s, c) => s + c.climateNewsCount, 0),
   };
 
   return { catalog, feeds, summary, updatedAt: new Date().toISOString() };

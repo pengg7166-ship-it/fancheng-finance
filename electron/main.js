@@ -18,6 +18,7 @@ const { fetchMacroLive } = require('../services/macro-fetcher');
 const { fetchForexLive, refreshForexLiveInBackground } = require('../services/forex-fetcher');
 const { fetchPolicyLive, refreshPolicyLiveInBackground } = require('../services/policy-fetcher');
 const { fetchGeopoliticsLive, refreshGeopoliticsInBackground } = require('../services/geopolitics-fetcher');
+const { fetchClimateLive, refreshClimateInBackground } = require('../services/climate-fetcher');
 const { fetchBojLive, refreshBojInBackground } = require('../services/boj-fetcher');
 const {
   fetchCommodityNews,
@@ -32,6 +33,7 @@ let mainWindow;
 let forexPushTimer = null;
 let policyPushTimer = null;
 let geopoliticsPushTimer = null;
+let climatePushTimer = null;
 let centralBankPushTimer = null;
 
 function bootstrapUserDataPath() {
@@ -101,6 +103,27 @@ function startGeopoliticsPushLoop() {
   };
   setTimeout(tick, 8000);
   geopoliticsPushTimer = setInterval(tick, getPolicyRefreshMs());
+}
+
+function pushClimateLiveToRenderer(data) {
+  if (!mainWindow || mainWindow.isDestroyed() || !data?.items?.length) return;
+  mainWindow.webContents.send('climate-live', data);
+}
+
+function startClimatePushLoop() {
+  if (climatePushTimer) clearInterval(climatePushTimer);
+  const tick = async () => {
+    try {
+      const data = await fetchClimateLive({ force: true });
+      if (data?.items?.length) pushClimateLiveToRenderer(data);
+    } catch {
+      refreshClimateInBackground().then((data) => {
+        if (data?.items?.length) pushClimateLiveToRenderer(data);
+      });
+    }
+  };
+  setTimeout(tick, 10000);
+  climatePushTimer = setInterval(tick, getPolicyRefreshMs());
 }
 
 function startPolicyPushLoop() {
@@ -211,6 +234,7 @@ app.whenReady().then(() => {
   startForexPushLoop();
   startPolicyPushLoop();
   startGeopoliticsPushLoop();
+  startClimatePushLoop();
   startCentralBankPushLoop();
   setTimeout(() => prefetchAfterStartup(), 4000);
   setInterval(() => flushAllCaches(), 2 * 60 * 1000);
@@ -367,6 +391,20 @@ ipcMain.handle('fetch-geopolitics-live', async (_event, options = {}) => {
     const cached = require('../services/geopolitics-fetcher').getCachedGeopoliticsSource();
     if (cached?.items?.length) return { ...cached, fromCache: true };
     return { error: localizeErrorMessage(err.message || '地缘政治更新失败') };
+  }
+});
+
+ipcMain.handle('fetch-climate-live', async (_event, options = {}) => {
+  try {
+    return await withIpcTimeout(
+      fetchClimateLive({ force: options.force !== false }),
+      40000,
+      '天气气候更新超时'
+    );
+  } catch (err) {
+    const cached = require('../services/climate-fetcher').getCachedClimateSource();
+    if (cached?.items?.length) return { ...cached, fromCache: true };
+    return { error: localizeErrorMessage(err.message || '天气气候更新失败') };
   }
 });
 

@@ -34,6 +34,7 @@ contextBridge.exposeInMainWorld('fancheng', {
   fetchForexLive: (options) => safeInvoke('fetch-forex-live', options),
   fetchPolicyLive: (options) => safeInvoke('fetch-policy-live', options),
   fetchGeopoliticsLive: (options) => safeInvoke('fetch-geopolitics-live', options),
+  fetchClimateLive: (options) => safeInvoke('fetch-climate-live', options),
   onForexLive: (callback) => {
     const handler = (_event, payload) => callback(payload);
     ipcRenderer.on('forex-live', handler);
@@ -48,6 +49,11 @@ contextBridge.exposeInMainWorld('fancheng', {
     const handler = (_event, payload) => callback(payload);
     ipcRenderer.on('geopolitics-live', handler);
     return () => ipcRenderer.removeListener('geopolitics-live', handler);
+  },
+  onClimateLive: (callback) => {
+    const handler = (_event, payload) => callback(payload);
+    ipcRenderer.on('climate-live', handler);
+    return () => ipcRenderer.removeListener('climate-live', handler);
   },
   onFedLive: (callback) => {
     const handler = (_event, payload) => callback(payload);
