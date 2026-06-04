@@ -75,7 +75,8 @@ $dir = '${q}'
 Get-ChildItem -LiteralPath $dir -Filter '*.lnk' -ErrorAction SilentlyContinue | ForEach-Object {
   try {
     $s = (New-Object -ComObject WScript.Shell).CreateShortcut($_.FullName)
-    if ($s.TargetPath -like '*fancheng-finance*') {
+    $t = $s.TargetPath
+    if ($t -like '*fancheng-finance*' -or $t -like '*FanchengFinance.exe*') {
       Remove-Item -LiteralPath $_.FullName -Force
       Write-Host ('Removed: ' + $_.FullName)
     }
