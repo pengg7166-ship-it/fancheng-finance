@@ -5,3 +5,4 @@
 3. **数据异常**：打开软件后点右上角 **刷新**，等底部时间更新即可。
 
 版本：**v1.12.2** · 数据目录：`E:\FanchengFinance\data`
+4. **（可选）备份源码到 GitHub**：在 E:\FanchengFinance\source\fancheng-finance 双击 **推送到GitHub.bat**；若仓库尚未创建，先看 **创建GitHub仓库说明.md**。
