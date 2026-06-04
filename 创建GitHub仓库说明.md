@@ -62,3 +62,14 @@
 ```
 origin  https://github.com/gaotianze/fancheng-finance.git
 ```
+
+## 用户名或 remote 不对
+
+1. GitHub 右上角头像 → **Your profile** 查看登录名（本仓库期望 **gaotianze**）。
+2. 修改 remote：
+   `at
+   cd /d E:\\FanchengFinance\\source\\fancheng-finance
+   git remote set-url origin https://github.com/你的用户名/fancheng-finance.git
+   git remote -v
+   `
+3. GitHub 仓库名须为 **fancheng-finance**，与 git remote -v 一致。
