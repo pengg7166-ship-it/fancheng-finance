@@ -18,7 +18,9 @@ const { translateNewsOffline, isMostlyEnglish } = require('./offline-translate')
 const { translateFinanceHeadline } = require('./finance-headline-translate');
 
 const CLIMATE_DISK_KEY = 'climate-radar.json';
-const CLIMATE_DISK_TTL_MS = 90 * 1000;
+const CLIMATE_DISK_TTL_MS = 120 * 1000;
+const CLIMATE_PAYLOAD_ITEM_LIMIT = 120;
+const CLIMATE_SEARCH_QUERY_LIMIT = 14;
 const RSS_TIMEOUT_MS = 8000;
 
 const parser = new Parser({
@@ -123,8 +125,8 @@ async function fetchRssFeed(feed) {
 }
 
 async function fetchSearchBundle() {
-  const queries = CLIMATE_SEARCH_QUERIES.slice(0, 22);
-  const batchSize = 8;
+  const queries = CLIMATE_SEARCH_QUERIES.slice(0, CLIMATE_SEARCH_QUERY_LIMIT);
+  const batchSize = 6;
   const all = [];
   for (let i = 0; i < queries.length; i += batchSize) {
     const batch = queries.slice(i, i + batchSize);
@@ -219,7 +221,7 @@ function buildClimateCommodityLinkage(climateItems) {
 
 async function buildClimatePayload(rawItems) {
   const normalized = rawItems.map(normalizeItem).filter(Boolean);
-  const items = dedupeAndSort(normalized);
+  const items = dedupeAndSort(normalized).slice(0, CLIMATE_PAYLOAD_ITEM_LIMIT);
   const groups = buildCategoryGroups(items);
   const stats = buildStats(items);
   const commodityLinkage = buildClimateCommodityLinkage(items);

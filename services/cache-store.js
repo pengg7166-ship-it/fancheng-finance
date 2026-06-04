@@ -4,14 +4,13 @@ const { isFredApiKeyConfigured } = require('./config');
 const { initNewsCacheFromDisk, flushNewsCacheToDisk, warmNewsCache } = require('./commodities-news');
 const { getCachedCommoditiesLive, refreshCommoditiesLiveInBackground } = require('./commodities-fetcher');
 const { getCachedMacroSource, fetchMacroSource } = require('./macro-fetcher');
-const { getCachedForexSource, fetchForexSource, refreshForexLiveInBackground } = require('./forex-fetcher');
+const { getCachedForexSource, fetchForexSource } = require('./forex-fetcher');
 const {
   getCachedPolicySource,
   fetchPolicySource,
-  refreshPolicyLiveInBackground,
 } = require('./policy-fetcher');
-const { getCachedBojSource, fetchBojSource, refreshBojInBackground, ensureBojPayloadLocalized } = require('./boj-fetcher');
-const { fetchClimateSource, refreshClimateInBackground } = require('./climate-fetcher');
+const { getCachedBojSource, fetchBojSource, ensureBojPayloadLocalized } = require('./boj-fetcher');
+const { fetchClimateSource } = require('./climate-fetcher');
 const { getCachedFedSpeeches } = require('./cb-speeches');
 const { getCachedFedIndicators } = require('./fed-indicators-fetcher');
 const { refreshFedInBackground } = require('./data-fetcher');
@@ -159,20 +158,15 @@ function prefetchKlinesInBackground() {
 
 function prefetchAfterStartup() {
   scheduleBackgroundRefresh();
-  refreshCommoditiesLiveInBackground();
-  warmNewsCache();
+  setTimeout(() => refreshCommoditiesLiveInBackground(), 2000);
+  setTimeout(() => warmNewsCache(), 4000);
   prefetchKlinesInBackground();
-  setTimeout(() => fetchMacroSource().catch(() => {}), 6000);
-  setTimeout(() => fetchForexSource().catch(() => {}), 8000);
-  setTimeout(() => fetchPolicySource().catch(() => {}), 10000);
-  setTimeout(() => fetchClimateSource().catch(() => {}), 11000);
-  setInterval(() => refreshClimateInBackground(), 30 * 1000);
-  setTimeout(() => refreshFedInBackground(), 4000);
-  setTimeout(() => fetchBojSource().catch(() => {}), 5000);
-  setInterval(() => refreshForexLiveInBackground(), 15 * 1000);
-  setInterval(() => refreshPolicyLiveInBackground(), 30 * 1000);
-  setInterval(() => refreshFedInBackground(), 30 * 1000);
-  setInterval(() => refreshBojInBackground(), 30 * 1000);
+  setTimeout(() => fetchMacroSource().catch(() => {}), 12000);
+  setTimeout(() => fetchForexSource().catch(() => {}), 14000);
+  setTimeout(() => fetchPolicySource().catch(() => {}), 16000);
+  setTimeout(() => fetchClimateSource().catch(() => {}), 22000);
+  setTimeout(() => refreshFedInBackground(), 6000);
+  setTimeout(() => fetchBojSource().catch(() => {}), 9000);
 }
 
 function flushAllCaches() {

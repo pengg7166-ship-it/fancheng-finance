@@ -1,5 +1,21 @@
 # 更新日志
 
+## v1.13.2 — 2026-06-04
+
+### 修复：Windows「未响应」/ 界面卡顿
+
+- **根因 1**：主进程 5 条 push loop（外汇/政策/地缘/气候/央行）与 `prefetchAfterStartup` 内 4 条 `setInterval` 重叠，同一周期内并发 `force:true` 全量网络拉取，阻塞 Electron 主线程 IPC。
+- **根因 2**：渲染进程 `startAutoRefresh` 与主进程 push 重复调用 `fetchPolicyLive` / `fetchClimateLive` 等，双倍 IPC + 双倍网络。
+- **根因 3**：`renderAll` 同步渲染 11 个面板（气候/地缘条目无上限），单次 innerHTML 过大阻塞 UI 线程。
+- **修复**：
+  - push loop 错峰启动、优先读缓存（`force:false`）、busy 防重入；移除 `cache-store` 重复后台 interval
+  - 渲染端移除重复 live timer，改由主进程 push + `on*Live` 更新
+  - 气候/地缘列表展示上限 80 条；`climate-fetcher` 载荷限 120 条、检索词减至 14
+  - `renderAll` 使用 `requestIdleCallback` 延迟；政策/气候面板 refresh 增加 debounce
+- 页脚版本号 **v1.13.2**
+
+---
+
 ## v1.13.1 — 2026-06-04
 
 ### 修复：启动白屏 / 空白窗口

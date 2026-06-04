@@ -57,19 +57,37 @@ function pushForexLiveToRenderer(data) {
   mainWindow.webContents.send('forex-live', data);
 }
 
-function startForexPushLoop() {
-  if (forexPushTimer) clearInterval(forexPushTimer);
-  const tick = async () => {
+function makePushTick(fetchFn, refreshFn, pushFn) {
+  let busy = false;
+  return async () => {
+    if (busy) return;
+    busy = true;
     try {
-      const data = await fetchForexLive({ force: true });
-      if (data?.pairs?.length) pushForexLiveToRenderer(data);
+      try {
+        const data = await fetchFn({ force: false });
+        if (data?.pairs?.length || data?.items?.length || hasCentralBankPayload(data)) {
+          pushFn(data);
+          return;
+        }
+      } catch {
+        // fall through to background refresh
+      }
+      const data = await refreshFn();
+      if (data?.pairs?.length || data?.items?.length || hasCentralBankPayload(data)) {
+        pushFn(data);
+      }
     } catch {
-      refreshForexLiveInBackground().then((data) => {
-        if (data?.pairs?.length) pushForexLiveToRenderer(data);
-      });
+      // ignore
+    } finally {
+      busy = false;
     }
   };
-  tick();
+}
+
+function startForexPushLoop() {
+  if (forexPushTimer) clearInterval(forexPushTimer);
+  const tick = makePushTick(fetchForexLive, refreshForexLiveInBackground, pushForexLiveToRenderer);
+  setTimeout(tick, 2500);
   forexPushTimer = setInterval(tick, getForexRefreshMs());
 }
 
@@ -91,18 +109,13 @@ function pushGeopoliticsLiveToRenderer(data) {
 
 function startGeopoliticsPushLoop() {
   if (geopoliticsPushTimer) clearInterval(geopoliticsPushTimer);
-  const tick = async () => {
-    try {
-      const data = await fetchGeopoliticsLive({ force: true });
-      if (data?.items?.length) pushGeopoliticsLiveToRenderer(data);
-    } catch {
-      refreshGeopoliticsInBackground().then((data) => {
-        if (data?.items?.length) pushGeopoliticsLiveToRenderer(data);
-      });
-    }
-  };
-  setTimeout(tick, 8000);
-  geopoliticsPushTimer = setInterval(tick, getPolicyRefreshMs());
+  const tick = makePushTick(
+    fetchGeopoliticsLive,
+    refreshGeopoliticsInBackground,
+    pushGeopoliticsLiveToRenderer
+  );
+  setTimeout(tick, 12000);
+  geopoliticsPushTimer = setInterval(tick, getPolicyRefreshMs() + 5000);
 }
 
 function pushClimateLiveToRenderer(data) {
@@ -112,34 +125,15 @@ function pushClimateLiveToRenderer(data) {
 
 function startClimatePushLoop() {
   if (climatePushTimer) clearInterval(climatePushTimer);
-  const tick = async () => {
-    try {
-      const data = await fetchClimateLive({ force: true });
-      if (data?.items?.length) pushClimateLiveToRenderer(data);
-    } catch {
-      refreshClimateInBackground().then((data) => {
-        if (data?.items?.length) pushClimateLiveToRenderer(data);
-      });
-    }
-  };
-  setTimeout(tick, 10000);
-  climatePushTimer = setInterval(tick, getPolicyRefreshMs());
+  const tick = makePushTick(fetchClimateLive, refreshClimateInBackground, pushClimateLiveToRenderer);
+  setTimeout(tick, 18000);
+  climatePushTimer = setInterval(tick, getPolicyRefreshMs() + 10000);
 }
 
 function startPolicyPushLoop() {
   if (policyPushTimer) clearInterval(policyPushTimer);
-  const tick = async () => {
-    try {
-      const data = await fetchPolicyLive({ force: true });
-      if (data?.items?.length) pushPolicyLiveToRenderer(data);
-    } catch {
-      refreshPolicyLiveInBackground().then((data) => {
-        if (data?.items?.length) pushPolicyLiveToRenderer(data);
-      });
-    }
-  };
-  tick();
-  setTimeout(tick, 5000);
+  const tick = makePushTick(fetchPolicyLive, refreshPolicyLiveInBackground, pushPolicyLiveToRenderer);
+  setTimeout(tick, 7000);
   policyPushTimer = setInterval(tick, getPolicyRefreshMs());
 }
 
@@ -165,7 +159,10 @@ function pushBojLiveToRenderer(data) {
 
 function startCentralBankPushLoop() {
   if (centralBankPushTimer) clearInterval(centralBankPushTimer);
+  let busy = false;
   const tick = async () => {
+    if (busy) return;
+    busy = true;
     try {
       const [fed, boj] = await Promise.allSettled([fetchFedLive(), fetchBojLive()]);
       if (fed.status === 'fulfilled' && fed.value) {
@@ -186,10 +183,12 @@ function startCentralBankPushLoop() {
       }
     } catch {
       // ignore
+    } finally {
+      busy = false;
     }
   };
-  setTimeout(tick, 3000);
-  centralBankPushTimer = setInterval(tick, getCentralBankRefreshMs());
+  setTimeout(tick, 5000);
+  centralBankPushTimer = setInterval(tick, getCentralBankRefreshMs() + 3000);
 }
 
 function createWindow() {
@@ -231,12 +230,14 @@ app.whenReady().then(() => {
     }
   });
   createWindow();
-  startForexPushLoop();
-  startPolicyPushLoop();
-  startGeopoliticsPushLoop();
-  startClimatePushLoop();
-  startCentralBankPushLoop();
-  setTimeout(() => prefetchAfterStartup(), 4000);
+  setTimeout(() => {
+    startForexPushLoop();
+    startPolicyPushLoop();
+    startGeopoliticsPushLoop();
+    startClimatePushLoop();
+    startCentralBankPushLoop();
+  }, 3000);
+  setTimeout(() => prefetchAfterStartup(), 8000);
   setInterval(() => flushAllCaches(), 2 * 60 * 1000);
 });
 
@@ -295,6 +296,7 @@ ipcMain.handle('save-config', async (_event, partial) => {
   if (partial.policyRefreshSeconds != null) {
     startPolicyPushLoop();
     startGeopoliticsPushLoop();
+    startClimatePushLoop();
   }
   return {
     ...saved,
