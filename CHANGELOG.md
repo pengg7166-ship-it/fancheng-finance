@@ -1,5 +1,15 @@
 # 更新日志
 
+## v1.13.1 — 2026-06-04
+
+### 修复：启动白屏 / 空白窗口
+
+- **根因**：已安装 `app.asar` 仍为 **v1.12.2**，与源码 **v1.13**（天气气候 + `climate-fetcher` / `cache-store` 依赖）不一致；若仅热更新部分文件会导致主进程 `require` 失败或渲染端 `renderAll` 报错，窗口仅显示标题栏、内容区空白。
+- **修复**：整包替换 `app.asar`（含全部 `climate-*` 服务、`main.js`、`preload.js`、`data-fetcher.js`、`src/app.js`、`index.html`）；确认 `geoFilterRegion` 已声明。
+- 页脚版本号 **v1.13.1**
+
+---
+
 ## v1.13.0 — 2026-06-04
 
 ### 天气气候板块
