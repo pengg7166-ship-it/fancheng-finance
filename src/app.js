@@ -2836,12 +2836,18 @@ function renderOutlookInstrumentDetail(inst) {
 function renderOutlookInstrumentRow(inst) {
   const range = inst.nextDayRangePct || {};
   const badges = (inst.techBadges || []).map(renderOutlookTechBadge).join('');
-  const priceStr =
-    inst.price != null
-      ? `${Number(inst.price).toLocaleString('zh-CN', { maximumFractionDigits: 2 })}${inst.unit ? ` ${escapeHtml(inst.unit)}` : ''}`
-      : '—';
+  let priceHtml;
+  if (inst.price != null && !Number.isNaN(Number(inst.price))) {
+    priceHtml = `${Number(inst.price).toLocaleString('zh-CN', { maximumFractionDigits: 2 })}${
+      inst.unit ? ` <span class="outlook-price-unit">${escapeHtml(inst.unit)}</span>` : ''
+    }`;
+  } else {
+    priceHtml = `<span class="outlook-price-missing">—</span>${
+      inst.priceReason ? `<span class="outlook-price-reason">${escapeHtml(inst.priceReason)}</span>` : ''
+    }`;
+  }
   const chg =
-    inst.changePct != null
+    inst.changePct != null && !Number.isNaN(Number(inst.changePct))
       ? `<span class="outlook-inst-chg ${inst.changePct >= 0 ? 'up' : 'down'}">${inst.changePct >= 0 ? '+' : ''}${Number(inst.changePct).toFixed(2)}%</span>`
       : '';
 
@@ -2851,7 +2857,7 @@ function renderOutlookInstrumentRow(inst) {
         <span class="outlook-inst-title">${escapeHtml(inst.name || inst.id)}</span>
         <span class="outlook-inst-ex">${escapeHtml(inst.exchange || '')}</span>
       </div>
-      <div class="outlook-inst-col outlook-inst-price">${priceStr} ${chg}</div>
+      <div class="outlook-inst-col outlook-inst-price">${priceHtml} ${chg}</div>
       <div class="outlook-inst-col outlook-inst-range">
         <span class="outlook-range-label">次日区间</span>
         <span class="outlook-range-value ${outlookDirectionClass(range.bias)}">${formatOutlookRangePct(range)}</span>
@@ -2859,10 +2865,10 @@ function renderOutlookInstrumentRow(inst) {
       </div>
       <div class="outlook-inst-col outlook-inst-dir">
         <span class="outlook-dir-arrow">${escapeHtml(inst.directionArrow || '→')}</span>
-        <span class="outlook-dir-label">${escapeHtml(inst.directionLabel || '')}</span>
+        <span class="outlook-dir-label">${escapeHtml(inst.directionLabel || '震荡')}</span>
         <span class="outlook-stars">${escapeHtml(inst.starsHtml || '')}</span>
       </div>
-      <div class="outlook-inst-col outlook-inst-badges">${badges || '<span class="outlook-tech-badge outlook-badge-flat">指标待日线积累</span>'}</div>
+      <div class="outlook-inst-col outlook-inst-badges">${badges || '<span class="outlook-tech-badge outlook-badge-flat">研判积累中</span>'}</div>
       <span class="outlook-expand-icon" aria-hidden="true">▸</span>
     </button>
     ${renderOutlookInstrumentDetail(inst)}
@@ -3072,6 +3078,14 @@ async function refreshOutlookLive(options = {}) {
 
 async function activateOutlookTab() {
   const cached = getOutlookCachedSource();
+  const startupCommodities = window.__startupSources?.commodities || window.__preloadedCommoditiesLive;
+  const hasCommodityQuotes = startupCommodities?.exchanges?.some((ex) =>
+    (ex.items || []).some((item) => item.price != null)
+  );
+  if ((!cached?.instruments?.length || (cached.instruments.length < 60 && hasCommodityQuotes)) && hasCommodityQuotes) {
+    await refreshOutlookLive({ force: true });
+    return;
+  }
   if (cached?.instruments?.length || cached?.categories?.length) {
     mountOutlookPanel(cached);
     const mounted = document.getElementById('panel-outlook');
@@ -3154,7 +3168,7 @@ function renderOutlookPanel(source) {
         <h3 class="outlook-section-title">四大类 outlook 参考</h3>
         <div class="outlook-category-grid">${categoryCards}</div>
       </section>
-      <p class="policy-note outlook-note">v1.16 多因子+技术面 · 六板块 ${instruments.length} 品种 · BOLL/MA/量比/持仓Δ · 区间非精确预测 · 仅供参考</p>
+      <p class="policy-note outlook-note">v1.16.1 多因子+技术面 · 六板块 ${instruments.length} 品种 · BOLL/MA/量比/持仓Δ · 区间非精确预测 · 仅供参考</p>
     </div>
   </div>`;
 }
@@ -3191,7 +3205,7 @@ function refreshOutlookPanelSections(panel, source) {
   if (instList && data.instruments?.length) {
     const hash = hashListInputs([
       'outlook-inst',
-      data.instruments.map((i) => `${i.id}:${i.direction}:${i.nextDayRangePct?.low}:${i.nextDayRangePct?.high}`).join(','),
+      data.instruments.map((i) => `${i.id}:${i.direction}:${i.price}:${i.nextDayRangePct?.low}:${i.nextDayRangePct?.high}`).join(','),
     ]);
     if (instList.dataset.listHash !== hash) {
       instList.dataset.listHash = hash;
@@ -4107,6 +4121,16 @@ function waitForStartupPush(timeoutMs = 800) {
 function applyStartupData(data, { fromCache = false, forceFullRender = false } = {}) {
   const prevIndex = selectedIndexId;
   const prevTf = selectedTimeframe;
+
+  if (data?.sources) {
+    window.__startupSources = { ...(window.__startupSources || {}), ...data.sources };
+  }
+  if (window.__preloadedCommoditiesLive?.exchanges?.length) {
+    window.__startupSources = {
+      ...(window.__startupSources || {}),
+      commodities: window.__preloadedCommoditiesLive,
+    };
+  }
 
   if (hasIndexData(data)) indicesLoading = false;
 

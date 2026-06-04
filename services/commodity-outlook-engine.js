@@ -4,7 +4,7 @@
  */
 const diskCache = require('./disk-cache');
 const { normalizeCommodityId } = require('./policy-commodity-map');
-const { getCommodityMeta } = require('./commodities-catalog');
+const { getCommodityMeta, getAllCommodities } = require('./commodities-catalog');
 const { getNewsKeywords, scoreNewsItem, getFastNewsPool, getGlobalNewsPoolSync } = require('./commodities-news');
 const { analyzeInstrumentTechnicals } = require('./commodity-technical-analyzer');
 
@@ -21,55 +21,78 @@ const OUTLOOK_SECTORS = [
   { id: 'agriculture', name: '农产品', icon: '🌾' },
 ];
 
-/** 研判覆盖的主力品种 registry — sector=UI 分组, bucket=宏观因子桶 */
-const INSTRUMENT_REGISTRY = [
-  { id: 'sc', aliases: ['原油', '石油'], sector: 'energy', bucket: 'energy', priority: 1 },
-  { id: 'fu', aliases: ['燃油', '燃料油'], sector: 'energy', bucket: 'energy', priority: 1 },
-  { id: 'pg', aliases: ['液化气', 'LPG'], sector: 'energy', bucket: 'energy', priority: 2 },
-  { id: 'ZC', aliases: ['动力煤'], sector: 'energy', bucket: 'energy', priority: 2 },
-  { id: 'lu', aliases: ['低硫燃料油'], sector: 'energy', bucket: 'energy', priority: 3 },
-  { id: 'bu', aliases: ['沥青'], sector: 'energy', bucket: 'energy', priority: 3 },
-  { id: 'jm', aliases: ['焦煤'], sector: 'chemical', bucket: 'energy', priority: 1 },
-  { id: 'FG', aliases: ['玻璃'], sector: 'chemical', bucket: 'agriculture', priority: 1 },
-  { id: 'TA', aliases: ['PTA'], sector: 'chemical', bucket: 'energy', priority: 1 },
-  { id: 'MA', aliases: ['甲醇'], sector: 'chemical', bucket: 'energy', priority: 1 },
-  { id: 'SA', aliases: ['纯碱'], sector: 'chemical', bucket: 'energy', priority: 2 },
-  { id: 'ru', aliases: ['橡胶', '天然橡胶'], sector: 'chemical', bucket: 'agriculture', priority: 2 },
-  { id: 'v', aliases: ['PVC'], sector: 'chemical', bucket: 'energy', priority: 2 },
-  { id: 'l', aliases: ['塑料', '聚乙烯'], sector: 'chemical', bucket: 'energy', priority: 2 },
-  { id: 'pp', aliases: ['聚丙烯'], sector: 'chemical', bucket: 'energy', priority: 2 },
-  { id: 'eg', aliases: ['乙二醇'], sector: 'chemical', bucket: 'energy', priority: 3 },
-  { id: 'eb', aliases: ['苯乙烯'], sector: 'chemical', bucket: 'energy', priority: 3 },
-  { id: 'UR', aliases: ['尿素'], sector: 'chemical', bucket: 'agriculture', priority: 3 },
-  { id: 'rb', aliases: ['螺纹', '螺纹钢'], sector: 'black', bucket: 'metals', priority: 1 },
-  { id: 'hc', aliases: ['热卷', '热轧卷板'], sector: 'black', bucket: 'metals', priority: 2 },
-  { id: 'i', aliases: ['铁矿', '铁矿石'], sector: 'black', bucket: 'metals', priority: 1 },
-  { id: 'j', aliases: ['焦炭'], sector: 'black', bucket: 'energy', priority: 2 },
-  { id: 'ss', aliases: ['不锈钢'], sector: 'black', bucket: 'metals', priority: 3 },
-  { id: 'cu', aliases: ['铜', '沪铜'], sector: 'metals', bucket: 'metals', priority: 1 },
-  { id: 'al', aliases: ['铝', '沪铝'], sector: 'metals', bucket: 'metals', priority: 1 },
-  { id: 'zn', aliases: ['锌', '沪锌'], sector: 'metals', bucket: 'metals', priority: 2 },
-  { id: 'ni', aliases: ['镍', '沪镍'], sector: 'metals', bucket: 'metals', priority: 2 },
-  { id: 'sn', aliases: ['锡', '沪锡'], sector: 'metals', bucket: 'metals', priority: 2 },
-  { id: 'si', aliases: ['工业硅'], sector: 'metals', bucket: 'metals', priority: 2 },
-  { id: 'lc', aliases: ['碳酸锂', '锂'], sector: 'metals', bucket: 'metals', priority: 1 },
-  { id: 'ps', aliases: ['多晶硅'], sector: 'metals', bucket: 'metals', priority: 2 },
-  { id: 'ao', aliases: ['氧化铝'], sector: 'metals', bucket: 'metals', priority: 3 },
-  { id: 'bc', aliases: ['国际铜'], sector: 'metals', bucket: 'metals', priority: 3 },
-  { id: 'au', aliases: ['金', '黄金', '沪金'], sector: 'precious', bucket: 'precious', priority: 1 },
-  { id: 'ag', aliases: ['银', '白银', '沪银'], sector: 'precious', bucket: 'precious', priority: 1 },
-  { id: 'pt', aliases: ['铂金'], sector: 'precious', bucket: 'precious', priority: 3 },
-  { id: 'pd', aliases: ['钯金'], sector: 'precious', bucket: 'precious', priority: 3 },
-  { id: 'p', aliases: ['棕榈', '棕榈油'], sector: 'agriculture', bucket: 'agriculture', priority: 1 },
-  { id: 'c', aliases: ['玉米'], sector: 'agriculture', bucket: 'agriculture', priority: 2 },
-  { id: 'm', aliases: ['豆粕'], sector: 'agriculture', bucket: 'agriculture', priority: 2 },
-  { id: 'y', aliases: ['豆油'], sector: 'agriculture', bucket: 'agriculture', priority: 2 },
-  { id: 'CF', aliases: ['棉花'], sector: 'agriculture', bucket: 'agriculture', priority: 2 },
-  { id: 'SR', aliases: ['白糖'], sector: 'agriculture', bucket: 'agriculture', priority: 2 },
-  { id: 'OI', aliases: ['菜油', '菜籽油'], sector: 'agriculture', bucket: 'agriculture', priority: 3 },
-  { id: 'RM', aliases: ['菜粕'], sector: 'agriculture', bucket: 'agriculture', priority: 3 },
-];
+/** UI sector + macro bucket for each catalog id (single source: commodities-catalog) */
+const OUTLOOK_SECTOR_BY_ID = {
+  sc: 'energy', fu: 'energy', pg: 'energy', ZC: 'energy', lu: 'energy', bu: 'energy', ec: 'energy',
+  jm: 'chemical', FG: 'chemical', TA: 'chemical', MA: 'chemical', SA: 'chemical', ru: 'chemical',
+  v: 'chemical', l: 'chemical', pp: 'chemical', eg: 'chemical', eb: 'chemical', UR: 'chemical',
+  PF: 'chemical', PX: 'chemical', SH: 'chemical', PR: 'chemical', br: 'chemical', ad: 'chemical',
+  rb: 'black', hc: 'black', i: 'black', j: 'black', ss: 'black', wr: 'black', SF: 'black', SM: 'black',
+  cu: 'metals', al: 'metals', zn: 'metals', pb: 'metals', ni: 'metals', sn: 'metals', si: 'metals',
+  lc: 'metals', ps: 'metals', ao: 'metals', bc: 'metals',
+  au: 'precious', ag: 'precious', pt: 'precious', pd: 'precious',
+  p: 'agriculture', c: 'agriculture', m: 'agriculture', y: 'agriculture', CF: 'agriculture', SR: 'agriculture',
+  OI: 'agriculture', RM: 'agriculture', a: 'agriculture', b: 'agriculture', cs: 'agriculture',
+  jd: 'agriculture', lh: 'agriculture', rr: 'agriculture', lg: 'agriculture', AP: 'agriculture',
+  CJ: 'agriculture', PK: 'agriculture', RS: 'agriculture', WH: 'agriculture', PM: 'agriculture',
+  RI: 'agriculture', LR: 'agriculture', JR: 'agriculture', CY: 'agriculture', sp: 'agriculture',
+};
 
+const OUTLOOK_BUCKET_BY_SECTOR = {
+  energy: 'energy',
+  chemical: 'energy',
+  black: 'metals',
+  metals: 'metals',
+  precious: 'precious',
+  agriculture: 'agriculture',
+};
+
+const OUTLOOK_PRIORITY_BY_ID = {
+  sc: 1, fu: 1, rb: 1, i: 1, cu: 1, al: 1, au: 1, ag: 1, lc: 1, p: 1, TA: 1, MA: 1, jm: 1, FG: 1,
+};
+
+function inferOutlookSector(meta) {
+  const id = meta.id;
+  if (OUTLOOK_SECTOR_BY_ID[id] != null) return OUTLOOK_SECTOR_BY_ID[id];
+  const lower = id.toLowerCase();
+  if (OUTLOOK_SECTOR_BY_ID[lower] != null) return OUTLOOK_SECTOR_BY_ID[lower];
+  if (meta.exchangeId === 'gfex') return 'metals';
+  if (meta.exchangeId === 'ine') return 'energy';
+  if (meta.exchangeId === 'dce') {
+    if (/^(c|m|y|p|a|b|cs|jd|lh|rr|lg)$/i.test(id)) return 'agriculture';
+    if (/^(j|jm|i|l|v|pp|eg|eb|pg)$/i.test(id)) return meta.exchangeId === 'dce' && /^j/i.test(id) ? 'black' : 'chemical';
+    return 'agriculture';
+  }
+  if (meta.exchangeId === 'zce') {
+    if (/^(CF|SR|OI|RM|AP|CJ|PK|RS|WH|PM|RI|LR|JR|CY)$/i.test(id)) return 'agriculture';
+    if (/^(TA|MA|FG|SA|UR|PF|PX|SH|PR|SF|SM|ZC)$/i.test(id)) return 'chemical';
+  }
+  if (meta.exchangeId === 'shfe') {
+    if (/^(au|ag)$/i.test(id)) return 'precious';
+    if (/^(cu|al|zn|pb|ni|sn|ss|ao|bc|ad|br)$/i.test(id)) return 'metals';
+    if (/^(rb|hc|wr)$/i.test(id)) return 'black';
+    if (/^(fu|bu|ru|sp)$/i.test(id)) return /^(ru|sp)$/i.test(id) ? 'agriculture' : 'energy';
+  }
+  return 'agriculture';
+}
+
+function buildInstrumentRegistryFromCatalog() {
+  return getAllCommodities().map((meta) => {
+    const sector = inferOutlookSector(meta);
+    const bucket = OUTLOOK_BUCKET_BY_SECTOR[sector] || 'agriculture';
+    const priority = OUTLOOK_PRIORITY_BY_ID[meta.id] ?? OUTLOOK_PRIORITY_BY_ID[meta.id.toLowerCase()] ?? 3;
+    return {
+      id: meta.id,
+      name: meta.name,
+      sector,
+      bucket,
+      priority,
+      exchangeId: meta.exchangeId,
+    };
+  });
+}
+
+const INSTRUMENT_REGISTRY = buildInstrumentRegistryFromCatalog();
 const OUTLOOK_INSTRUMENTS = INSTRUMENT_REGISTRY;
 
 const INSTRUMENT_FACTOR_WEIGHTS = {
@@ -546,14 +569,45 @@ function buildFactorsPanel(globalFactors) {
 }
 
 function findLiveQuote(commodityId, commoditiesSource) {
-  const id = String(commodityId);
+  const id = String(commodityId || '');
   const lower = id.toLowerCase();
+  const flat = commoditiesSource?.items;
+  if (Array.isArray(flat)) {
+    const hit = flat.find((item) => item.id === id || String(item.id).toLowerCase() === lower);
+    if (hit) return hit;
+  }
   for (const ex of commoditiesSource?.exchanges || []) {
     for (const item of ex.items || []) {
-      if (item.id === id || item.id.toLowerCase() === lower) return item;
+      if (item.id === id || String(item.id).toLowerCase() === lower) return item;
     }
   }
   return null;
+}
+
+function resolveInstrumentQuote(spec, commoditiesSource, technical) {
+  const liveQuote = findLiveQuote(spec.id, commoditiesSource);
+  let price = liveQuote?.price;
+  let changePct = liveQuote?.changePct;
+  let priceReason = null;
+
+  if (price == null || Number.isNaN(Number(price))) {
+    if (technical?.price != null && !Number.isNaN(Number(technical.price))) {
+      price = technical.price;
+      priceReason = '日线收盘价';
+    } else if (liveQuote && liveQuote.available === false) {
+      priceReason = '报价不可用';
+    } else if (!commoditiesSource?.exchanges?.length && !commoditiesSource?.items?.length) {
+      priceReason = '行情未加载';
+    } else {
+      priceReason = '暂无报价';
+    }
+  }
+
+  if (changePct == null || Number.isNaN(Number(changePct))) {
+    changePct = technical?.changePct ?? null;
+  }
+
+  return { liveQuote, price, changePct, priceReason };
 }
 
 function itemRelevantToInstrument(item, meta, keywords) {
@@ -698,8 +752,11 @@ function buildInstrumentRationale(meta, horizons, nextDay, factors, technical) {
   return parts.join('；');
 }
 
-function buildTechBadges(technical) {
+function buildTechBadges(technical, outlookPending = false) {
   const badges = [];
+  if (outlookPending) {
+    badges.push({ id: 'pending-outlook', label: '研判积累中', trend: 'flat' });
+  }
   if (!technical.hasEnough) {
     badges.push({ id: 'pending', label: '指标待日线积累', trend: 'flat' });
   }
@@ -747,23 +804,33 @@ function buildInstrumentOutlooks(sources) {
     const meta = getCommodityMeta(spec.id);
     if (!meta) return null;
 
-    const liveQuote = findLiveQuote(spec.id, sources.commodities);
-    const technical = analyzeInstrumentTechnicals(spec.id, liveQuote);
+    const quote = resolveInstrumentQuote(spec, sources.commodities, null);
+    const technical = analyzeInstrumentTechnicals(spec.id, quote.liveQuote);
+    const mergedQuote = resolveInstrumentQuote(spec, sources.commodities, technical);
     const newsFactor = scoreNewsForInstrument(meta, sources, newsPools);
     const macroScore = macroScoreForBucket(spec.bucket, sources);
 
+    const outlookPending = !technical.hasEnough && newsFactor.weight <= 0;
     const volOiScore = ((technical.volume?.score || 0) + (technical.oi?.score || 0)) / 2;
     const w = INSTRUMENT_FACTOR_WEIGHTS.short;
-    const compositeScore = clamp(
-      macroScore * w.macro +
-        newsFactor.score * w.news +
-        technical.techScore * w.technical +
-        volOiScore * w.volumeOi,
-      -1,
-      1
-    );
+    const compositeScore = outlookPending
+      ? clamp(macroScore * 0.5, -1, 1)
+      : clamp(
+          macroScore * w.macro +
+            newsFactor.score * w.news +
+            technical.techScore * w.technical +
+            volOiScore * w.volumeOi,
+          -1,
+          1
+        );
 
     const horizons = buildInstrumentHorizons(macroScore, newsFactor, technical, spec.bucket);
+    if (outlookPending) {
+      for (const h of ['short', 'medium', 'long']) {
+        horizons[h].directionLabel = '研判积累中';
+        horizons[h].commentary = horizons[h].commentary || '宏观因子已接入，技术面与新闻待积累';
+      }
+    }
     const nextDayRangePct = computeNextDayRangePct({
       compositeScore,
       boll: technical.boll,
@@ -800,23 +867,29 @@ function buildInstrumentOutlooks(sources) {
       oi: technical.oi,
     };
 
-    const rationale = buildInstrumentRationale(meta, horizons, nextDayRangePct, factors, technical);
+    const direction = scoreToDirection(compositeScore);
+    const dirLabel = outlookPending ? '研判积累中' : directionLabel(direction);
+    const rationale = outlookPending
+      ? `${meta.name}：${mergedQuote.price != null ? `现价 ${mergedQuote.price}` : '现价待加载'}；${mergedQuote.priceReason || '研判积累中'}`
+      : buildInstrumentRationale(meta, horizons, nextDayRangePct, factors, technical);
 
     return {
       id: meta.id,
       name: meta.name,
-      aliases: spec.aliases,
+      aliases: meta.keywords?.slice(0, 4) || [],
       exchange: meta.exchange,
       unit: meta.unit,
       bucket: spec.bucket,
       sector: spec.sector,
       priority: spec.priority,
-      price: technical.price,
-      changePct: technical.changePct,
+      price: mergedQuote.price,
+      changePct: mergedQuote.changePct,
+      priceReason: mergedQuote.priceReason,
+      outlookPending,
       compositeScore: +compositeScore.toFixed(4),
-      direction: scoreToDirection(compositeScore),
-      directionArrow: directionArrow(scoreToDirection(compositeScore)),
-      directionLabel: directionLabel(scoreToDirection(compositeScore)),
+      direction,
+      directionArrow: directionArrow(direction),
+      directionLabel: dirLabel,
       confidence: horizons.short.confidence,
       stars: horizons.short.stars,
       starsHtml: horizons.short.starsHtml,
@@ -824,7 +897,7 @@ function buildInstrumentOutlooks(sources) {
       short: horizons.short,
       medium: horizons.medium,
       long: horizons.long,
-      techBadges: buildTechBadges(technical),
+      techBadges: buildTechBadges(technical, outlookPending),
       factors,
       rationale,
       sourceNote: technical.sourceNote,
@@ -856,7 +929,7 @@ function buildCommodityOutlookFromSources(sources = {}) {
       categories,
       instruments,
       factors,
-      framework: { logicModel: '多因子+技术面（部分输入异常，已降级）', version: 'v1.16.0' },
+      framework: { logicModel: '多因子+技术面（部分输入异常，已降级）', version: 'v1.16.1' },
       sectors: OUTLOOK_SECTORS,
       stats: {
         categoryCount: categories.length,
@@ -898,7 +971,7 @@ function buildCommodityOutlookFromSources(sources = {}) {
       instrumentIds: INSTRUMENT_REGISTRY.map((i) => i.id),
       sectors: OUTLOOK_SECTORS,
       rangeFormula: 'nextDay.mid = 宏观×0.35+技术×0.25+新闻×0.2；区间 ± (BOLL带宽/2 + |新闻|×0.45)',
-      version: 'v1.16.0',
+      version: 'v1.16.1',
     },
     sectors: OUTLOOK_SECTORS,
     stats: {
@@ -915,19 +988,25 @@ function buildCommodityOutlookFromSources(sources = {}) {
 }
 
 function enrichSourcesForOutlook(sources = {}) {
-  if (sources.commodities?.exchanges?.length) return sources;
+  const next = { ...sources };
   try {
     const { getCachedCommoditiesLive } = require('./commodities-fetcher');
     const commodities = getCachedCommoditiesLive();
-    if (commodities) return { ...sources, commodities };
+    if (commodities?.exchanges?.length) {
+      next.commodities = commodities;
+    }
   } catch {
     // ignore
   }
-  return sources;
+  if (!next.commodities?.exchanges?.length && sources.commodities?.exchanges?.length) {
+    next.commodities = sources.commodities;
+  }
+  return next;
 }
 
 function fetchCommodityOutlookSource(sources) {
-  const payload = buildCommodityOutlookFromSources(enrichSourcesForOutlook(sources));
+  const enriched = enrichSourcesForOutlook(sources);
+  const payload = buildCommodityOutlookFromSources(enriched);
   diskCache.write(OUTLOOK_DISK_KEY, { data: payload, savedAt: Date.now() });
   return payload;
 }
@@ -939,19 +1018,31 @@ function getCachedCommodityOutlookSource() {
 }
 
 function fetchCommodityOutlookLive({ force = false, sources } = {}) {
+  const { getCachedAllData } = require('./data-fetcher');
+  const allSources = enrichSourcesForOutlook(sources || getCachedAllData()?.sources || {});
+  const hasCommodities = allSources.commodities?.exchanges?.some((e) => e.items?.some((i) => i.price != null));
+  const expectedCount = INSTRUMENT_REGISTRY.length;
+
   if (!force) {
     const cached = getCachedCommodityOutlookSource();
     const stale = diskCache.readStale(OUTLOOK_DISK_KEY);
+    const cachedCount = cached?.instruments?.length || 0;
+    const registryStale = cachedCount > 0 && cachedCount < expectedCount - 2;
+
     if (cached?.instruments?.length || cached?.categories?.length) {
+      if (registryStale || (hasCommodities && cachedCount === 0)) {
+        return fetchCommodityOutlookSource(allSources);
+      }
       if (Date.now() - (stale?.savedAt || 0) > OUTLOOK_DISK_TTL_MS) {
-        refreshCommodityOutlookInBackground(sources);
+        refreshCommodityOutlookInBackground(allSources);
       }
       return { ...cached, fromCache: true };
     }
+    if (hasCommodities) {
+      return fetchCommodityOutlookSource(allSources);
+    }
   }
 
-  const { getCachedAllData } = require('./data-fetcher');
-  const allSources = sources || getCachedAllData()?.sources || {};
   return fetchCommodityOutlookSource(allSources);
 }
 
@@ -977,6 +1068,7 @@ module.exports = {
   OUTLOOK_SECTORS,
   FACTOR_DEFS,
   HORIZON_WEIGHTS,
+  buildInstrumentRegistryFromCatalog,
   buildCommodityOutlookFromSources,
   fetchCommodityOutlookSource,
   getCachedCommodityOutlookSource,

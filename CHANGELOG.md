@@ -1,5 +1,17 @@
 # 更新日志
 
+## v1.16.1 — 2026-06-04
+
+### 修复：大宗走势研判显示模糊/列空 + 全品种覆盖
+
+- **显示根因**：`.outlook-instrument-list` 使用 `content-visibility: auto` 与 0.62–0.88rem 字号，滚动区文字发虚；列宽过窄导致重叠；现价未优先绑定 sina 实时缓存
+- **修复**：移除 outlook 列表 `content-visibility`；品种/现价/区间/徽章统一 14px+ 可读字号与 52px 行高；现价绑定 `commodities` 实时报价并显示缺失原因；次日区间渲染 `low~high%` + bias；技术徽章提高对比度
+- **覆盖**：`INSTRUMENT_REGISTRY` 改由 `commodities-catalog` 全量生成（~74 品种），sector tabs 自动计数；无技术面数据仍展示报价 +「研判积累中」
+- **管道**：outlook 引擎合并 commodities 报价；挂载时若品种空但行情已加载则同步重算；`diagnose-bootstrap` 断言首行价格/区间与字号
+- 页脚版本 **v1.16.1**
+
+---
+
 ## v1.16.0 — 2026-06-04
 
 ### 修复：大宗走势研判空白面板 + 扩展 44 品种六板块

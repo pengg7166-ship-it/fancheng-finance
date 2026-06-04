@@ -13,6 +13,7 @@ const {
   getCachedAllData,
   scheduleBackgroundRefresh,
 } = require('../services/data-fetcher');
+const { getAllCommodities } = require('../services/commodities-catalog');
 const { localizeErrorMessage } = require('../services/translate');
 const { version: APP_VERSION } = require('../package.json');
 const {
@@ -94,9 +95,17 @@ app.whenReady().then(async () => {
   warmAllCaches(app.getPath('userData'));
 
   const registryCount = INSTRUMENT_REGISTRY.length;
+  const catalogCount = getAllCommodities().length;
   const engineProbe = buildCommodityOutlookFromSources(getCachedAllData()?.sources || {});
+  const firstInst = engineProbe.instruments?.[0];
+  const firstHasPriceOrRange = Boolean(
+    (firstInst?.price != null && !Number.isNaN(Number(firstInst.price))) ||
+      (firstInst?.nextDayRangePct &&
+        firstInst.nextDayRangePct.low != null &&
+        firstInst.nextDayRangePct.high != null)
+  );
   console.log(
-    `[diagnose] registry=${registryCount} engineInstruments=${engineProbe.instruments?.length || 0} categories=${engineProbe.categories?.length || 0} version=${APP_VERSION}`
+    `[diagnose] catalog=${catalogCount} registry=${registryCount} engineInstruments=${engineProbe.instruments?.length || 0} firstPriceOrRange=${firstHasPriceOrRange} version=${APP_VERSION}`
   );
 
   const logs = [];
@@ -145,6 +154,14 @@ app.whenReady().then(async () => {
       const activePanel = document.querySelector('.panel.active');
       const outlookPanel = document.getElementById('panel-outlook');
       const outlookText = outlookPanel?.innerText || '';
+      const firstRow = outlookPanel?.querySelector('.outlook-instrument-row');
+      const firstTitle = firstRow?.querySelector('.outlook-inst-title');
+      const firstPrice = firstRow?.querySelector('.outlook-inst-price');
+      const firstRange = firstRow?.querySelector('.outlook-range-value');
+      const titleLen = firstTitle?.textContent?.trim().length || 0;
+      const priceText = firstPrice?.textContent?.trim() || '';
+      const rangeText = firstRange?.textContent?.trim() || '';
+      const titleFontPx = firstTitle ? parseFloat(getComputedStyle(firstTitle).fontSize) : 0;
       return {
         lastUpdated: document.getElementById('lastUpdated')?.textContent,
         panelsHidden: panels?.classList.contains('hidden'),
@@ -159,6 +176,14 @@ app.whenReady().then(async () => {
         outlookStuckLoading: /正在加载大宗走势研判/.test(outlookText),
         outlookHasEmptyState: /数据积累中|加载失败|刷新研判/.test(outlookText),
         outlookText: outlookText.slice(0, 320),
+        outlookFirstRow: {
+          titleLen,
+          titleFontPx,
+          titleLegible: titleLen >= 2 && titleFontPx >= 13,
+          priceText: priceText.slice(0, 40),
+          rangeText: rangeText.slice(0, 40),
+          hasPriceOrRangeText: /[\d.%+]/.test(priceText) || /[%~]/.test(rangeText),
+        },
         errorBanner: document.getElementById('errorBanner')?.innerText,
         version: document.getElementById('appVersion')?.textContent,
       };
@@ -169,8 +194,10 @@ app.whenReady().then(async () => {
     JSON.stringify(
       {
         appVersion: APP_VERSION,
+        catalogCount,
         registryCount,
         engineInstrumentCount: engineProbe.instruments?.length || 0,
+        engineFirstHasPriceOrRange: firstHasPriceOrRange,
         ipcInstrumentCount: ipcOutlook?.instruments?.length || 0,
         result,
         consoleErrors: logs,
