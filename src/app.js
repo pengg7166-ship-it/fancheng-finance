@@ -1,4 +1,4 @@
-const TAB_KEYS = ['indices', 'commodities', 'macro', 'forex', 'policy', 'geopolitics', 'climate', 'fed', 'boj', 'treasury', 'xinhua'];
+const TAB_KEYS = ['indices', 'commodities', 'macro', 'forex', 'policy', 'geopolitics', 'climate', 'outlook', 'fed', 'boj', 'treasury', 'xinhua'];
 const TAB_LABELS = {
   indices: '全球指数',
   commodities: '大宗商品',
@@ -7,6 +7,7 @@ const TAB_LABELS = {
   policy: '政策雷达',
   geopolitics: '地缘政治',
   climate: '天气气候',
+  outlook: '大宗走势研判',
   fed: '美联储',
   boj: '日本央行',
   treasury: '美国财政部',
@@ -20,6 +21,7 @@ const DOT_CLASS = {
   policy: 'dot-policy',
   geopolitics: 'dot-geopolitics',
   climate: 'dot-climate',
+  outlook: 'dot-outlook',
   fed: 'dot-fed',
   boj: 'dot-boj',
   treasury: 'dot-treasury',
@@ -329,6 +331,9 @@ function initPanelSetup(key) {
   } else if (key === 'climate') {
     setupClimatePanel();
     if (isActivePanel('climate')) refreshClimatePanelSections(panel);
+  } else if (key === 'outlook') {
+    setupOutlookPanel();
+    if (isActivePanel('outlook')) refreshOutlookPanelSections(panel);
   } else if (key === 'fed') setupCentralBankPanel('fed');
   else if (key === 'boj') setupCentralBankPanel('boj');
   else if (key === 'commodities' && window.CommoditiesUI?.ensureInit) {
@@ -2740,6 +2745,193 @@ function refreshClimatePanelSections(panel, source) {
 
 const refreshClimatePanelSectionsDebounced = debounce(refreshClimatePanelSections, FILTER_DEBOUNCE_MS);
 
+function outlookDirectionClass(dir) {
+  if (dir === 'bullish') return 'outlook-direction-bullish';
+  if (dir === 'bearish') return 'outlook-direction-bearish';
+  return 'outlook-direction-neutral';
+}
+
+function renderOutlookHorizonCell(h) {
+  if (!h) return '<span class="outlook-horizon-empty">—</span>';
+  return `<div class="outlook-horizon-cell ${outlookDirectionClass(h.direction)}">
+    <span class="outlook-dir-arrow" aria-hidden="true">${escapeHtml(h.directionArrow || '→')}</span>
+    <span class="outlook-dir-label">${escapeHtml(h.directionLabel || '震荡')}</span>
+    <span class="outlook-stars" title="置信度">${escapeHtml(h.starsHtml || '')}</span>
+    <p class="outlook-commentary">${escapeHtml(h.commentary || '')}</p>
+  </div>`;
+}
+
+function renderOutlookCategoryCard(cat) {
+  return `<article class="outlook-category-card" data-outlook-bucket="${escapeAttr(cat.id)}">
+    <header class="outlook-category-head">
+      <span class="outlook-category-icon">${escapeHtml(cat.icon || '')}</span>
+      <h3 class="outlook-category-name">${escapeHtml(cat.name || '')}</h3>
+    </header>
+    <div class="outlook-horizon-grid">
+      <div class="outlook-horizon-col">
+        <h4 class="outlook-horizon-label">短期</h4>
+        ${renderOutlookHorizonCell(cat.short)}
+      </div>
+      <div class="outlook-horizon-col">
+        <h4 class="outlook-horizon-label">中期</h4>
+        ${renderOutlookHorizonCell(cat.medium)}
+      </div>
+      <div class="outlook-horizon-col">
+        <h4 class="outlook-horizon-label">长期</h4>
+        ${renderOutlookHorizonCell(cat.long)}
+      </div>
+    </div>
+  </article>`;
+}
+
+function renderOutlookFactorCard(f) {
+  return `<article class="outlook-factor-card ${outlookDirectionClass(f.direction)}" data-outlook-factor="${escapeAttr(f.id)}">
+    <header class="outlook-factor-head">
+      <span class="outlook-factor-icon">${escapeHtml(f.icon || '')}</span>
+      <span class="outlook-factor-label">${escapeHtml(f.label || '')}</span>
+      <span class="outlook-dir-arrow outlook-factor-arrow">${escapeHtml(f.directionArrow || '→')}</span>
+    </header>
+    <div class="outlook-factor-meta">
+      <span class="outlook-dir-label">${escapeHtml(f.directionLabel || '')}</span>
+      <span class="outlook-stars">${escapeHtml(f.starsHtml || '')}</span>
+    </div>
+    <p class="outlook-factor-summary">${escapeHtml(f.summary || '')}</p>
+    ${f.detail ? `<p class="outlook-factor-detail">${escapeHtml(f.detail)}</p>` : ''}
+  </article>`;
+}
+
+function renderOutlookStatsInline(stats) {
+  if (!stats) return '';
+  return `<div class="policy-stats-inline outlook-stats-inline">
+    <span>${escapeHtml(stats.dataQualityLabel || '')}</span>
+    <span>${stats.categoryCount || 4} 大类</span>
+    <span>${stats.factorCount || 7} 因子</span>
+  </div>`;
+}
+
+function renderOutlookPanel(source) {
+  const hasData = source.categories?.length;
+  const liveTag = source.liveRefreshedAt
+    ? `<span class="policy-live-tag policy-live-badge outlook-live-tag"><span class="policy-live-dot"></span>实时 ${formatDate(source.liveRefreshedAt)}</span>`
+    : '';
+
+  if (!hasData) {
+    return `<div class="panel ${activeTab === 'outlook' ? 'active' : ''}" id="panel-outlook" role="tabpanel">
+      <div class="empty-state">正在加载大宗走势研判…</div>
+    </div>`;
+  }
+
+  window.__outlookCacheCategories = source.categories;
+  window.__outlookCacheFactors = source.factors;
+  window.__outlookCacheFramework = source.framework;
+  window.__outlookCacheStats = source.stats;
+
+  const categoryCards = source.categories.map(renderOutlookCategoryCard).join('');
+  const factorCards = (source.factors || []).map(renderOutlookFactorCard).join('');
+
+  return `<div class="panel ${activeTab === 'outlook' ? 'active' : ''}" id="panel-outlook" role="tabpanel">
+    <div class="policy-panel policy-reading-v2 outlook-panel">
+      <header class="policy-reading-head">
+        <div class="policy-reading-head-main">
+          <h2 class="policy-reading-title">${escapeHtml(source.dataLabel || '大宗走势研判')}</h2>
+          ${renderOutlookStatsInline(source.stats)}
+        </div>
+        ${liveTag}
+      </header>
+      <div class="outlook-framework-bar geo-framework-bar">
+        <p class="outlook-framework-intro geo-framework-intro">${escapeHtml(source.framework?.logicModel || '多因子规则评分')}</p>
+      </div>
+      <section class="outlook-section">
+        <h3 class="outlook-section-title">四大类 outlook 总览</h3>
+        <div class="outlook-category-grid">${categoryCards}</div>
+      </section>
+      <section class="outlook-section">
+        <h3 class="outlook-section-title">因子分解</h3>
+        <div class="outlook-factor-grid">${factorCards}</div>
+      </section>
+      <p class="policy-note outlook-note">规则加权 v1 · 美股/美元/政策/气候/地缘/美联储/日央行 · 非 ML 预测 · 仅供参考</p>
+    </div>
+  </div>`;
+}
+
+function refreshOutlookPanelSections(panel, source) {
+  if (!panel || !isActivePanel('outlook')) return;
+  const data = source || {
+    categories: window.__outlookCacheCategories || [],
+    factors: window.__outlookCacheFactors || [],
+    framework: window.__outlookCacheFramework,
+    stats: window.__outlookCacheStats,
+    dataLabel: '大宗商品走势研判 · 多因子规则评分 · 短/中/长期展望',
+  };
+  if (!data.categories?.length) return;
+
+  const headMain = panel.querySelector('.policy-reading-head-main');
+  if (headMain) {
+    const statsEl = headMain.querySelector('.outlook-stats-inline');
+    if (statsEl) statsEl.outerHTML = renderOutlookStatsInline(data.stats);
+  }
+
+  const frameworkIntro = panel.querySelector('.outlook-framework-intro');
+  if (frameworkIntro && data.framework?.logicModel) {
+    frameworkIntro.textContent = data.framework.logicModel;
+  }
+
+  const catGrid = panel.querySelector('.outlook-category-grid');
+  if (catGrid) {
+    const hash = hashListInputs(['outlook-cat', data.categories.map((c) => `${c.id}:${c.short?.direction}`).join(',')]);
+    if (catGrid.dataset.listHash !== hash) {
+      catGrid.dataset.listHash = hash;
+      catGrid.innerHTML = data.categories.map(renderOutlookCategoryCard).join('');
+    }
+  }
+
+  const factorGrid = panel.querySelector('.outlook-factor-grid');
+  if (factorGrid) {
+    const hash = hashListInputs(['outlook-fac', data.factors?.map((f) => `${f.id}:${f.direction}`).join(',')]);
+    if (factorGrid.dataset.listHash !== hash) {
+      factorGrid.dataset.listHash = hash;
+      factorGrid.innerHTML = (data.factors || []).map(renderOutlookFactorCard).join('');
+    }
+  }
+
+  updateNavTabBadge('outlook', null);
+}
+
+const refreshOutlookPanelSectionsDebounced = debounce(refreshOutlookPanelSections, FILTER_DEBOUNCE_MS);
+
+function setupOutlookPanel() {
+  const panel = document.getElementById('panel-outlook');
+  if (!panel || panel.dataset.outlookSetup === '1') return;
+  panel.dataset.outlookSetup = '1';
+}
+
+function applyOutlookLiveData(source) {
+  if (!source?.categories?.length) return;
+
+  window.__outlookCacheCategories = source.categories;
+  window.__outlookCacheFactors = source.factors;
+  window.__outlookCacheFramework = source.framework;
+  window.__outlookCacheStats = source.stats;
+
+  if (!isActivePanel('outlook')) {
+    updateNavTabBadge('outlook', source.categories.length);
+    return;
+  }
+  if (rendererPaused) return;
+
+  const panel = document.getElementById('panel-outlook');
+  if (panel) refreshOutlookPanelSectionsDebounced(panel, source);
+
+  const stamp = source.liveRefreshedAt || source.updatedAt;
+  const liveTag = panel?.querySelector('.outlook-live-tag');
+  if (liveTag && stamp) {
+    liveTag.innerHTML = `<span class="policy-live-dot"></span>实时 ${formatDate(stamp)}`;
+  }
+  if (stamp) {
+    $('#lastUpdated').textContent = `研判实时 ${formatDate(stamp)}`;
+  }
+}
+
 function renderPolicyPanel(source) {
   const hasData = source.items?.length;
   const liveTag = source.liveRefreshedAt
@@ -2876,6 +3068,12 @@ function renderPanel(key, source) {
     window.__climateCacheStats = source.stats;
     window.__climateCacheFramework = source.framework;
   }
+  if (key === 'outlook' && source?.categories) {
+    window.__outlookCacheCategories = source.categories;
+    window.__outlookCacheFactors = source.factors;
+    window.__outlookCacheFramework = source.framework;
+    window.__outlookCacheStats = source.stats;
+  }
   if (key === 'indices') return renderIndicesPanel(source);
   if (key === 'commodities') return window.CommoditiesUI.renderPanelShell(activeTab);
 
@@ -2898,6 +3096,7 @@ function renderPanel(key, source) {
   if (key === 'policy') return renderPolicyPanel(source);
   if (key === 'geopolitics') return renderGeopoliticsPanel(source);
   if (key === 'climate') return renderClimatePanel(source);
+  if (key === 'outlook') return renderOutlookPanel(source);
 
   if (key === 'boj') {
     return renderCentralBankPanel('boj', source);
@@ -3086,6 +3285,13 @@ function applyIncrementalDataUpdate(data, { fromCache = false } = {}) {
     const panel = document.getElementById('panel-climate');
     if (panel?.querySelector('.climate-reading-scroll')) {
       refreshClimatePanelSectionsDebounced(panel, sources.climate);
+    }
+  }
+
+  if (sources.outlook?.categories?.length && isActivePanel('outlook')) {
+    const panel = document.getElementById('panel-outlook');
+    if (panel?.querySelector('.outlook-panel')) {
+      refreshOutlookPanelSectionsDebounced(panel, sources.outlook);
     }
   }
 
@@ -4120,6 +4326,7 @@ function switchTab(key) {
     key === 'policy' ||
     key === 'geopolitics' ||
     key === 'climate' ||
+    key === 'outlook' ||
     key === 'fed' ||
     key === 'boj';
   $('#liveBadge')?.classList.toggle('hidden', !showLive);
@@ -4142,6 +4349,8 @@ function switchTab(key) {
     refreshGeopoliticsPanelSections(document.getElementById('panel-geopolitics'));
   } else if (key === 'climate') {
     refreshClimatePanelSections(document.getElementById('panel-climate'));
+  } else if (key === 'outlook') {
+    refreshOutlookPanelSections(document.getElementById('panel-outlook'));
   }
   if (key === 'fed') {
     repatchCbSpeechesInDom('fed');
@@ -4670,6 +4879,13 @@ async function bootstrapApp() {
       });
     }
 
+    if (window.fancheng.onOutlookLive) {
+      window.fancheng.onOutlookLive((outlook) => {
+        if (!outlook?.categories?.length) return;
+        applyOutlookLiveData(outlook);
+      });
+    }
+
     if (window.fancheng.onFedLive) {
       window.fancheng.onFedLive((fed) => {
         if (!hasCentralBankLivePayload(fed)) return;
@@ -4711,6 +4927,9 @@ async function bootstrapApp() {
         if (activeTab === 'climate' && data.sources?.climate?.items?.length) {
           window.__climateCacheItems = data.sources.climate.items;
           applyClimateLiveData(data.sources.climate);
+        }
+        if (activeTab === 'outlook' && data.sources?.outlook?.categories?.length) {
+          applyOutlookLiveData(data.sources.outlook);
         }
         if (activeTab === 'fed' && hasCentralBankLivePayload(data.sources?.fed)) {
           applyFedLiveData(data.sources.fed);

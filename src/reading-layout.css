@@ -1033,3 +1033,217 @@
 .climate-note {
   color: #64748b;
 }
+
+/* ── 大宗走势研判 outlook panel ── */
+.outlook-panel .policy-reading-title {
+  color: var(--outlook, #f59e0b);
+}
+
+.outlook-live-tag .policy-live-dot {
+  background: var(--outlook, #f59e0b);
+}
+
+.outlook-framework-bar {
+  margin: 0 0 1rem;
+  padding: 0.65rem 0.85rem;
+  border-radius: 8px;
+  background: rgba(245, 158, 11, 0.06);
+  border: 1px solid rgba(245, 158, 11, 0.15);
+}
+
+.outlook-framework-intro {
+  margin: 0;
+  font-size: 0.82rem;
+  color: #94a3b8;
+  line-height: 1.5;
+}
+
+.outlook-section {
+  margin-bottom: 1.25rem;
+}
+
+.outlook-section-title {
+  margin: 0 0 0.65rem;
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: #cbd5e1;
+}
+
+.outlook-category-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 0.75rem;
+}
+
+.outlook-category-card {
+  padding: 0.85rem;
+  border-radius: 10px;
+  background: rgba(15, 23, 42, 0.55);
+  border: 1px solid rgba(148, 163, 184, 0.12);
+}
+
+.outlook-category-head {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  margin-bottom: 0.65rem;
+}
+
+.outlook-category-icon {
+  font-size: 1.1rem;
+}
+
+.outlook-category-name {
+  margin: 0;
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: #e2e8f0;
+}
+
+.outlook-horizon-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 0.45rem;
+}
+
+.outlook-horizon-label {
+  margin: 0 0 0.35rem;
+  font-size: 0.72rem;
+  font-weight: 500;
+  color: #64748b;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.outlook-horizon-cell {
+  padding: 0.45rem 0.4rem;
+  border-radius: 6px;
+  background: rgba(30, 41, 59, 0.5);
+  min-height: 4.5rem;
+}
+
+.outlook-dir-arrow {
+  font-size: 1.15rem;
+  font-weight: 700;
+  margin-right: 0.25rem;
+}
+
+.outlook-dir-label {
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+
+.outlook-stars {
+  display: block;
+  font-size: 0.72rem;
+  color: #fbbf24;
+  letter-spacing: 0.05em;
+  margin: 0.2rem 0;
+}
+
+.outlook-commentary {
+  margin: 0.25rem 0 0;
+  font-size: 0.68rem;
+  line-height: 1.4;
+  color: #94a3b8;
+}
+
+.outlook-direction-bullish .outlook-dir-arrow,
+.outlook-direction-bullish .outlook-dir-label {
+  color: #4ade80;
+}
+
+.outlook-direction-bearish .outlook-dir-arrow,
+.outlook-direction-bearish .outlook-dir-label {
+  color: #f87171;
+}
+
+.outlook-direction-neutral .outlook-dir-arrow,
+.outlook-direction-neutral .outlook-dir-label {
+  color: #94a3b8;
+}
+
+.outlook-factor-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 0.65rem;
+}
+
+.outlook-factor-card {
+  padding: 0.7rem 0.75rem;
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.45);
+  border: 1px solid rgba(148, 163, 184, 0.1);
+  border-left-width: 3px;
+}
+
+.outlook-factor-card.outlook-direction-bullish {
+  border-left-color: #4ade80;
+}
+
+.outlook-factor-card.outlook-direction-bearish {
+  border-left-color: #f87171;
+}
+
+.outlook-factor-card.outlook-direction-neutral {
+  border-left-color: #64748b;
+}
+
+.outlook-factor-head {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  margin-bottom: 0.35rem;
+}
+
+.outlook-factor-icon {
+  font-size: 1rem;
+}
+
+.outlook-factor-label {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: #e2e8f0;
+  flex: 1;
+}
+
+.outlook-factor-arrow {
+  font-size: 1rem;
+}
+
+.outlook-factor-meta {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.35rem;
+}
+
+.outlook-factor-summary {
+  margin: 0;
+  font-size: 0.75rem;
+  line-height: 1.45;
+  color: #cbd5e1;
+}
+
+.outlook-factor-detail {
+  margin: 0.3rem 0 0;
+  font-size: 0.68rem;
+  color: #64748b;
+}
+
+.outlook-note {
+  margin-top: 0.5rem;
+}
+
+.outlook-stats-inline {
+  color: #94a3b8;
+}
+
+@media (max-width: 720px) {
+  .outlook-horizon-grid {
+    grid-template-columns: 1fr;
+  }
+  .outlook-category-grid {
+    grid-template-columns: 1fr;
+  }
+}

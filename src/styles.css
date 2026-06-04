@@ -19,6 +19,7 @@
   --policy: #f97316;
   --geopolitics: #a855f7;
   --climate: #22d3ee;
+  --outlook: #f59e0b;
   --danger: #ef4444;
   --radius: 10px;
   --shadow: 0 4px 24px rgba(0, 0, 0, 0.35);
@@ -224,6 +225,8 @@ body {
 .dot-geopolitics { background: var(--geopolitics); }
 .dot-climate { background: var(--climate); }
 .tab[data-tab="climate"].active { border-bottom-color: var(--climate); }
+.dot-outlook { background: var(--outlook); }
+.tab[data-tab="outlook"].active { border-bottom-color: var(--outlook); }
 
 .macro-panel {
   padding: 8px 4px 24px;

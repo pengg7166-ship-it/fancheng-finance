@@ -8,6 +8,11 @@ const { fetchForexSource, getCachedForexSource } = require('./forex-fetcher');
 const { fetchPolicySource, getCachedPolicySource } = require('./policy-fetcher');
 const { fetchGeopoliticsSource, getCachedGeopoliticsSource } = require('./geopolitics-fetcher');
 const { fetchClimateSource, getCachedClimateSource } = require('./climate-fetcher');
+const {
+  buildCommodityOutlookFromSources,
+  getCachedCommodityOutlookSource,
+  fetchCommodityOutlookSource,
+} = require('./commodity-outlook-engine');
 const { fetchBojSource, getCachedBojSource, ensureBojPayloadLocalized } = require('./boj-fetcher');
 const { fetchFedSpeeches } = require('./cb-speeches');
 const { fetchFredBatch } = require('./fred-client');
@@ -45,6 +50,8 @@ function sourceHasData(source) {
   if (source.groups?.some((g) => g.pairs?.length)) return true;
   if (source.pairs?.length) return true;
   if (source.items?.length) return true;
+  if (source.categories?.length) return true;
+  if (source.factors?.length) return true;
   if (source.news?.length) return true;
   if (source.speeches?.length) return true;
   if (source.indicators?.length) return true;
@@ -158,6 +165,10 @@ const SOURCES = {
     name: '天气气候',
     dataLabel: '全球天气气候雷达 · 农业/矿山物流/宏观传导',
   },
+  outlook: {
+    name: '大宗走势研判',
+    dataLabel: '大宗商品走势研判 · 多因子规则评分 · 短/中/长期展望',
+  },
   boj: {
     name: '日本央行',
     dataLabel: '日本货币政策与核心指标（日本央行 · FRED · 新浪）',
@@ -263,6 +274,8 @@ function emptySource(key) {
         ? []
         : undefined,
     pairs: key === 'forex' ? [] : undefined,
+    categories: key === 'outlook' ? [] : undefined,
+    factors: key === 'outlook' ? [] : undefined,
     items: key === 'policy' || key === 'geopolitics' || key === 'climate' ? [] : undefined,
     dataLabel: SOURCES[key].dataLabel,
     updatedAt: new Date().toISOString(),
@@ -426,6 +439,19 @@ async function refreshAllData() {
     }
   });
 
+  try {
+    sources.outlook = fetchCommodityOutlookSource(sources);
+  } catch {
+    sources.outlook = {
+      key: 'outlook',
+      name: SOURCES.outlook.name,
+      dataLabel: SOURCES.outlook.dataLabel,
+      categories: [],
+      factors: [],
+      updatedAt: new Date().toISOString(),
+    };
+  }
+
   const payload = {
     sources,
     errors,
@@ -521,6 +547,7 @@ async function fetchAllData({ force = false, fast = false } = {}) {
         geopolitics: emptySource('geopolitics'),
         climate: emptySource('climate'),
         boj: emptySource('boj'),
+        outlook: emptySource('outlook'),
       },
       errors: indexErrors,
       fetchedAt: new Date().toISOString(),

@@ -19,6 +19,10 @@ const { fetchForexLive, refreshForexLiveInBackground } = require('../services/fo
 const { fetchPolicyLive, refreshPolicyLiveInBackground } = require('../services/policy-fetcher');
 const { fetchGeopoliticsLive, refreshGeopoliticsInBackground } = require('../services/geopolitics-fetcher');
 const { fetchClimateLive, refreshClimateInBackground } = require('../services/climate-fetcher');
+const {
+  fetchCommodityOutlookLive,
+  refreshCommodityOutlookInBackground,
+} = require('../services/commodity-outlook-engine');
 const { fetchBojLive, refreshBojInBackground } = require('../services/boj-fetcher');
 const {
   fetchCommodityNews,
@@ -197,6 +201,7 @@ const pushCycleSteps = [
   { name: 'policy', run: null },
   { name: 'geopolitics', run: null },
   { name: 'climate', run: null },
+  { name: 'outlook', run: null },
   { name: 'centralBank', run: null },
 ];
 
@@ -209,7 +214,12 @@ function initPushCycleSteps() {
     pushGeopoliticsLiveToRenderer
   );
   pushCycleSteps[3].run = makePushTick(fetchClimateLive, refreshClimateInBackground, pushClimateLiveToRenderer);
-  pushCycleSteps[4].run = makeCentralBankPushTick();
+  pushCycleSteps[4].run = makePushTick(
+    fetchCommodityOutlookLive,
+    refreshCommodityOutlookInBackground,
+    pushOutlookLiveToRenderer
+  );
+  pushCycleSteps[5].run = makeCentralBankPushTick();
 }
 
 async function runPushCycle(force = false) {
@@ -276,6 +286,11 @@ function pushGeopoliticsLiveToRenderer(data) {
 function pushClimateLiveToRenderer(data) {
   if (!data?.items?.length) return;
   pushToRenderer('climate-live', data, hashLiveItemsPayload);
+}
+
+function pushOutlookLiveToRenderer(data) {
+  if (!data?.categories?.length) return;
+  pushToRenderer('outlook-live', data, hashLiveItemsPayload);
 }
 
 function getCentralBankRefreshMs() {
@@ -523,6 +538,21 @@ ipcMain.handle('fetch-climate-live', async (_event, options = {}) => {
     const cached = require('../services/climate-fetcher').getCachedClimateSource();
     if (cached?.items?.length) return { ...cached, fromCache: true };
     return { error: localizeErrorMessage(err.message || '天气气候更新失败') };
+  }
+});
+
+ipcMain.handle('fetch-outlook-live', async (_event, options = {}) => {
+  try {
+    const sources = getCachedAllData()?.sources;
+    return await withIpcTimeout(
+      fetchCommodityOutlookLive({ force: options.force !== false, sources }),
+      8000,
+      '大宗走势研判更新超时'
+    );
+  } catch (err) {
+    const cached = require('../services/commodity-outlook-engine').getCachedCommodityOutlookSource();
+    if (cached?.categories?.length) return { ...cached, fromCache: true };
+    return { error: localizeErrorMessage(err.message || '大宗走势研判更新失败') };
   }
 });
 
