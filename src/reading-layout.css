@@ -1243,6 +1243,42 @@
   margin-bottom: 1.25rem;
 }
 
+.outlook-sector-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0 0 12px;
+}
+
+.outlook-sector-tab {
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.03);
+  color: #94a3b8;
+  border-radius: 999px;
+  padding: 6px 12px;
+  font-size: 0.82rem;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+
+.outlook-sector-tab:hover {
+  border-color: #f59e0b;
+  color: #e2e8f0;
+}
+
+.outlook-sector-tab.active {
+  background: rgba(245, 158, 11, 0.16);
+  border-color: #f59e0b;
+  color: #f59e0b;
+}
+
+.outlook-sector-empty {
+  margin-top: 12px;
+  padding: 16px;
+  text-align: center;
+  color: #94a3b8;
+}
+
 .outlook-section-head {
   display: flex;
   align-items: baseline;

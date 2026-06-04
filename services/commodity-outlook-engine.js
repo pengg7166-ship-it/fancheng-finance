@@ -11,26 +11,66 @@ const { analyzeInstrumentTechnicals } = require('./commodity-technical-analyzer'
 const OUTLOOK_DISK_KEY = 'commodity-outlook-v2.json';
 const OUTLOOK_DISK_TTL_MS = 60 * 1000;
 
-/** 研判覆盖的主力品种（铜/金/银 + 能源/黑色/农产品等） */
-const OUTLOOK_INSTRUMENTS = [
-  { id: 'cu', aliases: ['铜', '沪铜'], bucket: 'metals', priority: 1 },
-  { id: 'au', aliases: ['金', '黄金', '沪金'], bucket: 'precious', priority: 1 },
-  { id: 'ag', aliases: ['银', '白银', '沪银'], bucket: 'precious', priority: 1 },
-  { id: 'sc', aliases: ['原油', '石油'], bucket: 'energy', priority: 1 },
-  { id: 'rb', aliases: ['螺纹', '螺纹钢'], bucket: 'metals', priority: 2 },
-  { id: 'i', aliases: ['铁矿', '铁矿石'], bucket: 'metals', priority: 2 },
-  { id: 'al', aliases: ['铝', '沪铝'], bucket: 'metals', priority: 2 },
-  { id: 'zn', aliases: ['锌', '沪锌'], bucket: 'metals', priority: 2 },
-  { id: 'ni', aliases: ['镍', '沪镍'], bucket: 'metals', priority: 3 },
-  { id: 'fu', aliases: ['燃油', '燃料油'], bucket: 'energy', priority: 2 },
-  { id: 'p', aliases: ['棕榈', '棕榈油'], bucket: 'agriculture', priority: 2 },
-  { id: 'c', aliases: ['玉米'], bucket: 'agriculture', priority: 2 },
-  { id: 'm', aliases: ['豆粕'], bucket: 'agriculture', priority: 2 },
-  { id: 'TA', aliases: ['PTA'], bucket: 'energy', priority: 3 },
-  { id: 'MA', aliases: ['甲醇'], bucket: 'energy', priority: 3 },
-  { id: 'lc', aliases: ['碳酸锂', '锂'], bucket: 'metals', priority: 2 },
-  { id: 'bc', aliases: ['国际铜'], bucket: 'metals', priority: 3 },
+/** UI 板块分组 */
+const OUTLOOK_SECTORS = [
+  { id: 'energy', name: '能源', icon: '⚡' },
+  { id: 'chemical', name: '化工', icon: '🧪' },
+  { id: 'black', name: '黑色', icon: '⛏' },
+  { id: 'metals', name: '有色新能源', icon: '🔩' },
+  { id: 'precious', name: '贵金属', icon: '🥇' },
+  { id: 'agriculture', name: '农产品', icon: '🌾' },
 ];
+
+/** 研判覆盖的主力品种 registry — sector=UI 分组, bucket=宏观因子桶 */
+const INSTRUMENT_REGISTRY = [
+  { id: 'sc', aliases: ['原油', '石油'], sector: 'energy', bucket: 'energy', priority: 1 },
+  { id: 'fu', aliases: ['燃油', '燃料油'], sector: 'energy', bucket: 'energy', priority: 1 },
+  { id: 'pg', aliases: ['液化气', 'LPG'], sector: 'energy', bucket: 'energy', priority: 2 },
+  { id: 'ZC', aliases: ['动力煤'], sector: 'energy', bucket: 'energy', priority: 2 },
+  { id: 'lu', aliases: ['低硫燃料油'], sector: 'energy', bucket: 'energy', priority: 3 },
+  { id: 'bu', aliases: ['沥青'], sector: 'energy', bucket: 'energy', priority: 3 },
+  { id: 'jm', aliases: ['焦煤'], sector: 'chemical', bucket: 'energy', priority: 1 },
+  { id: 'FG', aliases: ['玻璃'], sector: 'chemical', bucket: 'agriculture', priority: 1 },
+  { id: 'TA', aliases: ['PTA'], sector: 'chemical', bucket: 'energy', priority: 1 },
+  { id: 'MA', aliases: ['甲醇'], sector: 'chemical', bucket: 'energy', priority: 1 },
+  { id: 'SA', aliases: ['纯碱'], sector: 'chemical', bucket: 'energy', priority: 2 },
+  { id: 'ru', aliases: ['橡胶', '天然橡胶'], sector: 'chemical', bucket: 'agriculture', priority: 2 },
+  { id: 'v', aliases: ['PVC'], sector: 'chemical', bucket: 'energy', priority: 2 },
+  { id: 'l', aliases: ['塑料', '聚乙烯'], sector: 'chemical', bucket: 'energy', priority: 2 },
+  { id: 'pp', aliases: ['聚丙烯'], sector: 'chemical', bucket: 'energy', priority: 2 },
+  { id: 'eg', aliases: ['乙二醇'], sector: 'chemical', bucket: 'energy', priority: 3 },
+  { id: 'eb', aliases: ['苯乙烯'], sector: 'chemical', bucket: 'energy', priority: 3 },
+  { id: 'UR', aliases: ['尿素'], sector: 'chemical', bucket: 'agriculture', priority: 3 },
+  { id: 'rb', aliases: ['螺纹', '螺纹钢'], sector: 'black', bucket: 'metals', priority: 1 },
+  { id: 'hc', aliases: ['热卷', '热轧卷板'], sector: 'black', bucket: 'metals', priority: 2 },
+  { id: 'i', aliases: ['铁矿', '铁矿石'], sector: 'black', bucket: 'metals', priority: 1 },
+  { id: 'j', aliases: ['焦炭'], sector: 'black', bucket: 'energy', priority: 2 },
+  { id: 'ss', aliases: ['不锈钢'], sector: 'black', bucket: 'metals', priority: 3 },
+  { id: 'cu', aliases: ['铜', '沪铜'], sector: 'metals', bucket: 'metals', priority: 1 },
+  { id: 'al', aliases: ['铝', '沪铝'], sector: 'metals', bucket: 'metals', priority: 1 },
+  { id: 'zn', aliases: ['锌', '沪锌'], sector: 'metals', bucket: 'metals', priority: 2 },
+  { id: 'ni', aliases: ['镍', '沪镍'], sector: 'metals', bucket: 'metals', priority: 2 },
+  { id: 'sn', aliases: ['锡', '沪锡'], sector: 'metals', bucket: 'metals', priority: 2 },
+  { id: 'si', aliases: ['工业硅'], sector: 'metals', bucket: 'metals', priority: 2 },
+  { id: 'lc', aliases: ['碳酸锂', '锂'], sector: 'metals', bucket: 'metals', priority: 1 },
+  { id: 'ps', aliases: ['多晶硅'], sector: 'metals', bucket: 'metals', priority: 2 },
+  { id: 'ao', aliases: ['氧化铝'], sector: 'metals', bucket: 'metals', priority: 3 },
+  { id: 'bc', aliases: ['国际铜'], sector: 'metals', bucket: 'metals', priority: 3 },
+  { id: 'au', aliases: ['金', '黄金', '沪金'], sector: 'precious', bucket: 'precious', priority: 1 },
+  { id: 'ag', aliases: ['银', '白银', '沪银'], sector: 'precious', bucket: 'precious', priority: 1 },
+  { id: 'pt', aliases: ['铂金'], sector: 'precious', bucket: 'precious', priority: 3 },
+  { id: 'pd', aliases: ['钯金'], sector: 'precious', bucket: 'precious', priority: 3 },
+  { id: 'p', aliases: ['棕榈', '棕榈油'], sector: 'agriculture', bucket: 'agriculture', priority: 1 },
+  { id: 'c', aliases: ['玉米'], sector: 'agriculture', bucket: 'agriculture', priority: 2 },
+  { id: 'm', aliases: ['豆粕'], sector: 'agriculture', bucket: 'agriculture', priority: 2 },
+  { id: 'y', aliases: ['豆油'], sector: 'agriculture', bucket: 'agriculture', priority: 2 },
+  { id: 'CF', aliases: ['棉花'], sector: 'agriculture', bucket: 'agriculture', priority: 2 },
+  { id: 'SR', aliases: ['白糖'], sector: 'agriculture', bucket: 'agriculture', priority: 2 },
+  { id: 'OI', aliases: ['菜油', '菜籽油'], sector: 'agriculture', bucket: 'agriculture', priority: 3 },
+  { id: 'RM', aliases: ['菜粕'], sector: 'agriculture', bucket: 'agriculture', priority: 3 },
+];
+
+const OUTLOOK_INSTRUMENTS = INSTRUMENT_REGISTRY;
 
 const INSTRUMENT_FACTOR_WEIGHTS = {
   short: { macro: 0.28, news: 0.22, technical: 0.35, volumeOi: 0.15 },
@@ -660,6 +700,9 @@ function buildInstrumentRationale(meta, horizons, nextDay, factors, technical) {
 
 function buildTechBadges(technical) {
   const badges = [];
+  if (!technical.hasEnough) {
+    badges.push({ id: 'pending', label: '指标待日线积累', trend: 'flat' });
+  }
   if (technical.maStack) {
     badges.push({
       id: 'ma',
@@ -700,7 +743,7 @@ function buildInstrumentOutlooks(sources) {
     newsPools = [];
   }
 
-  return OUTLOOK_INSTRUMENTS.map((spec) => {
+  return INSTRUMENT_REGISTRY.map((spec) => {
     const meta = getCommodityMeta(spec.id);
     if (!meta) return null;
 
@@ -766,6 +809,7 @@ function buildInstrumentOutlooks(sources) {
       exchange: meta.exchange,
       unit: meta.unit,
       bucket: spec.bucket,
+      sector: spec.sector,
       priority: spec.priority,
       price: technical.price,
       changePct: technical.changePct,
@@ -812,7 +856,8 @@ function buildCommodityOutlookFromSources(sources = {}) {
       categories,
       instruments,
       factors,
-      framework: { logicModel: '多因子+技术面（部分输入异常，已降级）', version: 'v1.15.0' },
+      framework: { logicModel: '多因子+技术面（部分输入异常，已降级）', version: 'v1.16.0' },
+      sectors: OUTLOOK_SECTORS,
       stats: {
         categoryCount: categories.length,
         instrumentCount: 0,
@@ -850,10 +895,12 @@ function buildCommodityOutlookFromSources(sources = {}) {
         '宏观七因子 → 品种新闻加权 → 成交量/持仓/OIΔ → BOLL(20,2)+MA排列 → 合成评分 → 次日波动区间',
       horizons: HORIZON_LABELS,
       factorIds: FACTOR_DEFS.map((f) => f.id),
-      instrumentIds: OUTLOOK_INSTRUMENTS.map((i) => i.id),
+      instrumentIds: INSTRUMENT_REGISTRY.map((i) => i.id),
+      sectors: OUTLOOK_SECTORS,
       rangeFormula: 'nextDay.mid = 宏观×0.35+技术×0.25+新闻×0.2；区间 ± (BOLL带宽/2 + |新闻|×0.45)',
-      version: 'v1.15.0',
+      version: 'v1.16.0',
     },
+    sectors: OUTLOOK_SECTORS,
     stats: {
       categoryCount: categories.length,
       instrumentCount: instruments.length,
@@ -925,7 +972,9 @@ function refreshCommodityOutlookInBackground(sources) {
 
 module.exports = {
   COMMODITY_BUCKETS,
+  INSTRUMENT_REGISTRY,
   OUTLOOK_INSTRUMENTS,
+  OUTLOOK_SECTORS,
   FACTOR_DEFS,
   HORIZON_WEIGHTS,
   buildCommodityOutlookFromSources,

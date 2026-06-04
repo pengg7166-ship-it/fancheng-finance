@@ -170,9 +170,17 @@ function computeVolumeRatio(bars) {
 }
 
 function readCachedKlines(commodityId) {
-  const key = `klines/commodity-${commodityId}-day.json`;
+  const meta = getCommodityMeta(commodityId);
+  const cacheId = meta?.id || String(commodityId || '').toLowerCase();
+  const key = `klines/commodity-${cacheId}-day.json`;
   const stored = diskCache.readStale(key);
-  return stored?.data?.klines || [];
+  if (stored?.data?.klines?.length) return stored.data.klines;
+  const altKey = `klines/commodity-${String(commodityId || '').toLowerCase()}-day.json`;
+  if (altKey !== key) {
+    const alt = diskCache.readStale(altKey);
+    return alt?.data?.klines || [];
+  }
+  return [];
 }
 
 function updateOiSnapshot(commodityId, openInterest) {
@@ -270,7 +278,7 @@ function analyzeInstrumentTechnicals(commodityId, liveQuote = null) {
     volume,
     oi,
     techScore,
-    sourceNote: hasEnough ? null : `K线 ${dataPoints} 根（≥20 根时 BOLL/完整 MA 生效）`,
+    sourceNote: hasEnough ? null : '指标待日线积累',
   };
 }
 

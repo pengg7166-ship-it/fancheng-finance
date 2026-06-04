@@ -1,5 +1,18 @@
 # 更新日志
 
+## v1.16.0 — 2026-06-04
+
+### 修复：大宗走势研判空白面板 + 扩展 44 品种六板块
+
+- **根因**：`mountOutlookPanel` 在面板已有 DOM 但无 `.outlook-instrument-row` 时不执行 `replaceSinglePanel`；`renderPanel` 增量缓存漏写 `instruments`；`executeRenderAll` 用空 outlook 覆盖已渲染表格；live 回调仅检查 `categories`
+- **修复**：`outlookPanelNeedsFullMount` 强制挂载；空态/重试保留；全量渲染时保留已有 instrument 行；IPC/live 路径统一检查 instruments∨categories
+- **品种扩展**：`INSTRUMENT_REGISTRY` 44 主力 — 能源/化工/黑色/有色新能源/贵金属/农产品（焦煤·玻璃·PTA·甲醇·纯碱·橡胶·PVC·塑料·PP·原油·燃油·液化气·动力煤·工业硅·多晶硅·碳酸锂·镍·锡等）
+- **UI**：六板块 sector tabs 筛选；K线不足显示「指标待日线积累」仍展示新闻+宏观+现价
+- **诊断**：`diagnose-bootstrap.js` 输出 registry 数、IPC instrument 数、面板可见文本
+- 页脚版本 **v1.16.0**
+
+---
+
 ## v1.15.0 — 2026-06-04
 
 ### 升级：大宗走势研判 — 逐品种多因子 + 次日波动区间

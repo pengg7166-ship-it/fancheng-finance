@@ -15,6 +15,10 @@ const {
 } = require('../services/data-fetcher');
 const { localizeErrorMessage } = require('../services/translate');
 const { version: APP_VERSION } = require('../package.json');
+const {
+  INSTRUMENT_REGISTRY,
+  buildCommodityOutlookFromSources,
+} = require('../services/commodity-outlook-engine');
 
 function bootstrapUserDataPath() {
   const externalUserData = getUserDataDir();
@@ -23,8 +27,6 @@ function bootstrapUserDataPath() {
     migrateUserDataFromRoaming(externalUserData);
   }
 }
-
-bootstrapUserDataPath();
 
 function registerIpc() {
   ipcMain.handle('get-app-version', async () => APP_VERSION);
@@ -84,11 +86,18 @@ function registerIpc() {
   });
 }
 
+bootstrapUserDataPath();
 registerIpc();
 
 app.whenReady().then(async () => {
   config.init(app.getPath('userData'));
   warmAllCaches(app.getPath('userData'));
+
+  const registryCount = INSTRUMENT_REGISTRY.length;
+  const engineProbe = buildCommodityOutlookFromSources(getCachedAllData()?.sources || {});
+  console.log(
+    `[diagnose] registry=${registryCount} engineInstruments=${engineProbe.instruments?.length || 0} categories=${engineProbe.categories?.length || 0} version=${APP_VERSION}`
+  );
 
   const logs = [];
   const win = new BrowserWindow({
@@ -114,6 +123,18 @@ app.whenReady().then(async () => {
   await win.loadFile(path.join(__dirname, '../src/index.html'));
   await new Promise((r) => setTimeout(r, 10000));
 
+  let ipcOutlook = null;
+  try {
+    ipcOutlook = await win.webContents.executeJavaScript(`
+      (async () => window.fancheng?.fetchOutlookLive?.({ force: true }))()
+    `);
+    console.log(
+      `[diagnose] ipcOutlook instruments=${ipcOutlook?.instruments?.length || 0} categories=${ipcOutlook?.categories?.length || 0} error=${ipcOutlook?.error || 'none'}`
+    );
+  } catch (err) {
+    console.log(`[diagnose] ipcOutlook failed: ${err.message}`);
+  }
+
   const result = await win.webContents.executeJavaScript(`
     (async () => {
       const outlookTab = document.querySelector('.tab[data-tab="outlook"]');
@@ -134,14 +155,29 @@ app.whenReady().then(async () => {
         outlookHasContent: Boolean(outlookPanel?.querySelector('.outlook-panel')),
         outlookHasInstruments: Boolean(outlookPanel?.querySelector('.outlook-instrument-row')),
         outlookInstrumentCount: outlookPanel?.querySelectorAll('.outlook-instrument-row').length || 0,
+        outlookSectorTabCount: outlookPanel?.querySelectorAll('.outlook-sector-tab').length || 0,
         outlookStuckLoading: /正在加载大宗走势研判/.test(outlookText),
-        outlookText: outlookText.slice(0, 220),
+        outlookHasEmptyState: /数据积累中|加载失败|刷新研判/.test(outlookText),
+        outlookText: outlookText.slice(0, 320),
         errorBanner: document.getElementById('errorBanner')?.innerText,
         version: document.getElementById('appVersion')?.textContent,
       };
     })()
   `);
 
-  console.log(JSON.stringify({ result, consoleErrors: logs }, null, 2));
+  console.log(
+    JSON.stringify(
+      {
+        appVersion: APP_VERSION,
+        registryCount,
+        engineInstrumentCount: engineProbe.instruments?.length || 0,
+        ipcInstrumentCount: ipcOutlook?.instruments?.length || 0,
+        result,
+        consoleErrors: logs,
+      },
+      null,
+      2
+    )
+  );
   app.quit();
 });
