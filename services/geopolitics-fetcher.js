@@ -205,9 +205,11 @@ function dedupeAndSort(items) {
   });
 }
 
+const GEO_PAYLOAD_ITEM_LIMIT = 120;
+
 async function buildGeopoliticsPayload(rawItems) {
   const normalized = rawItems.map(normalizeItem).filter(Boolean);
-  const items = dedupeAndSort(normalized);
+  const items = dedupeAndSort(normalized).slice(0, GEO_PAYLOAD_ITEM_LIMIT);
   const groups = buildRegionGroups(items);
   const countryIndex = buildCountryIndex(items);
   const stats = buildStats(items);

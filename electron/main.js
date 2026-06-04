@@ -35,6 +35,30 @@ let policyPushTimer = null;
 let geopoliticsPushTimer = null;
 let climatePushTimer = null;
 let centralBankPushTimer = null;
+const lastPushHashByChannel = {};
+
+function hashLiveItemsPayload(data) {
+  if (!data) return '';
+  const stamp = data.liveRefreshedAt || data.updatedAt || '';
+  const count = data.items?.length || data.pairs?.length || 0;
+  const head = data.items?.[0]?.id || data.pairs?.[0]?.id || '';
+  return `${stamp}|${count}|${head}`;
+}
+
+function hashCentralBankPayload(data) {
+  if (!data) return '';
+  const stamp = data.liveRefreshedAt || data.updatedAt || '';
+  return `${stamp}|${data.news?.length || 0}|${data.speeches?.length || 0}|${data.indicators?.length || 0}`;
+}
+
+function pushToRenderer(channel, data, hashFn) {
+  if (!mainWindow || mainWindow.isDestroyed() || !data) return;
+  if (mainWindow.webContents.isLoading()) return;
+  const hash = hashFn(data);
+  if (!hash || lastPushHashByChannel[channel] === hash) return;
+  lastPushHashByChannel[channel] = hash;
+  mainWindow.webContents.send(channel, data);
+}
 
 function bootstrapUserDataPath() {
   const externalUserData = getUserDataDir();
@@ -53,8 +77,8 @@ function getForexRefreshMs() {
 }
 
 function pushForexLiveToRenderer(data) {
-  if (!mainWindow || mainWindow.isDestroyed() || !data?.pairs?.length) return;
-  mainWindow.webContents.send('forex-live', data);
+  if (!data?.pairs?.length) return;
+  pushToRenderer('forex-live', data, hashLiveItemsPayload);
 }
 
 function makePushTick(fetchFn, refreshFn, pushFn) {
@@ -98,13 +122,13 @@ function getPolicyRefreshMs() {
 }
 
 function pushPolicyLiveToRenderer(data) {
-  if (!mainWindow || mainWindow.isDestroyed() || !data?.items?.length) return;
-  mainWindow.webContents.send('policy-live', data);
+  if (!data?.items?.length) return;
+  pushToRenderer('policy-live', data, hashLiveItemsPayload);
 }
 
 function pushGeopoliticsLiveToRenderer(data) {
-  if (!mainWindow || mainWindow.isDestroyed() || !data?.items?.length) return;
-  mainWindow.webContents.send('geopolitics-live', data);
+  if (!data?.items?.length) return;
+  pushToRenderer('geopolitics-live', data, hashLiveItemsPayload);
 }
 
 function startGeopoliticsPushLoop() {
@@ -119,8 +143,8 @@ function startGeopoliticsPushLoop() {
 }
 
 function pushClimateLiveToRenderer(data) {
-  if (!mainWindow || mainWindow.isDestroyed() || !data?.items?.length) return;
-  mainWindow.webContents.send('climate-live', data);
+  if (!data?.items?.length) return;
+  pushToRenderer('climate-live', data, hashLiveItemsPayload);
 }
 
 function startClimatePushLoop() {
@@ -148,13 +172,13 @@ function hasCentralBankPayload(data) {
 }
 
 function pushFedLiveToRenderer(data) {
-  if (!mainWindow || mainWindow.isDestroyed() || !hasCentralBankPayload(data)) return;
-  mainWindow.webContents.send('fed-live', data);
+  if (!hasCentralBankPayload(data)) return;
+  pushToRenderer('fed-live', data, hashCentralBankPayload);
 }
 
 function pushBojLiveToRenderer(data) {
-  if (!mainWindow || mainWindow.isDestroyed() || !hasCentralBankPayload(data)) return;
-  mainWindow.webContents.send('boj-live', data);
+  if (!hasCentralBankPayload(data)) return;
+  pushToRenderer('boj-live', data, hashCentralBankPayload);
 }
 
 function startCentralBankPushLoop() {

@@ -344,10 +344,13 @@ function buildStats(items) {
   };
 }
 
+const POLICY_PAYLOAD_ITEM_LIMIT = 150;
+
 async function fetchPolicyRadar() {
   const rawItems = await fetchAllPolicyRaw();
   let items = dedupeAndSort(rawItems);
   items = await translateUsPolicyItems(items);
+  items = items.slice(0, POLICY_PAYLOAD_ITEM_LIMIT);
   const groups = buildDepartmentGroups(items);
   const stats = buildStats(items);
 
