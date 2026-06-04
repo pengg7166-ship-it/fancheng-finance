@@ -12,4 +12,5 @@ _v*/
 _asar-*/
 _check-*/
 _pkg-extract/
-app.js
+# 根目录旧版入口（实际使用 src/app.js）
+/app.js
