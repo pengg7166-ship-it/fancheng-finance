@@ -31,6 +31,8 @@ const DOT_CLASS = {
 const CLIMATE_DISPLAY_LIMIT = 80;
 const GEO_DISPLAY_LIMIT = 80;
 const POLICY_DISPLAY_LIMIT = 80;
+const OUTLOOK_INSTRUMENT_LIMIT = 32;
+const OUTLOOK_INSTRUMENT_ROW_HEIGHT = 72;
 const VIRTUAL_ROW_ESTIMATE = 112;
 const VIRTUAL_OVERSCAN = 4;
 const VIRTUAL_MAX_ROWS = 32;
@@ -2761,6 +2763,102 @@ function renderOutlookHorizonCell(h) {
   </div>`;
 }
 
+function formatOutlookRangePct(range) {
+  if (!range) return '—';
+  const low = Number(range.low);
+  const high = Number(range.high);
+  if (Number.isNaN(low) || Number.isNaN(high)) return '—';
+  const sign = (n) => (n > 0 ? '+' : '') + n.toFixed(2);
+  return `${sign(low)}% ~ ${sign(high)}%`;
+}
+
+function renderOutlookTechBadge(b) {
+  const trendClass = b.trend === 'up' ? 'outlook-badge-up' : b.trend === 'down' ? 'outlook-badge-down' : 'outlook-badge-flat';
+  return `<span class="outlook-tech-badge ${trendClass}">${escapeHtml(b.label || '')}</span>`;
+}
+
+function renderOutlookInstrumentDetail(inst) {
+  const f = inst.factors || {};
+  const newsHits = (f.news?.hits || [])
+    .map(
+      (h) =>
+        `<li class="outlook-news-hit ${outlookDirectionClass(h.direction)}"><span class="outlook-news-dir">${escapeHtml(h.direction === 'bullish' ? '↑' : h.direction === 'bearish' ? '↓' : '→')}</span> ${escapeHtml(h.title || '')} <span class="outlook-news-src">${escapeHtml(h.source || '')}</span></li>`
+    )
+    .join('');
+  const macroRows = (f.macro?.factors || [])
+    .map(
+      (mf) =>
+        `<span class="outlook-macro-chip ${outlookDirectionClass(mf.direction)}">${escapeHtml(mf.label)} ${escapeHtml(mf.score > 0 ? '+' : '')}${Number(mf.score).toFixed(2)}</span>`
+    )
+    .join('');
+  const tech = f.technical || {};
+  const ma = tech.maStack || {};
+  const boll = tech.boll || {};
+  const vol = f.volume || {};
+  const oi = f.oi || {};
+
+  return `<div class="outlook-instrument-detail" hidden>
+    <p class="outlook-rationale">${escapeHtml(inst.rationale || '')}</p>
+    <div class="outlook-detail-grid">
+      <div class="outlook-detail-block">
+        <h5>宏观因子（${escapeHtml(inst.bucket || '')}）</h5>
+        <div class="outlook-macro-chips">${macroRows || '—'}</div>
+      </div>
+      <div class="outlook-detail-block">
+        <h5>技术指标</h5>
+        <ul class="outlook-indicator-list">
+          <li>MA5/10/20/60：${[ma.ma5, ma.ma10, ma.ma20, ma.ma60].map((v) => (v != null ? Number(v).toFixed(1) : '—')).join(' / ')}</li>
+          <li>BOLL：上 ${boll.upper ?? '—'} · 中 ${boll.mid ?? '—'} · 下 ${boll.lower ?? '—'} · 带宽 ${boll.bandwidth ?? '—'}%</li>
+          <li>量比：${vol.ratio ?? '—'}（${escapeHtml(vol.label || '—')}）</li>
+          <li>持仓变化：${oi.deltaPct != null ? `${oi.deltaPct > 0 ? '+' : ''}${oi.deltaPct}%` : '—'}（${escapeHtml(oi.label || '—')}）</li>
+          <li>K线样本：${tech.dataPoints ?? 0} 根${tech.hasEnough ? '' : '（≥20 根时 BOLL 完整生效）'}</li>
+        </ul>
+      </div>
+      <div class="outlook-detail-block">
+        <h5>新闻命中</h5>
+        <ul class="outlook-news-hits">${newsHits || '<li class="outlook-news-hit">暂无显著新闻</li>'}</ul>
+      </div>
+    </div>
+    ${inst.sourceNote ? `<p class="outlook-source-note">${escapeHtml(inst.sourceNote)}</p>` : ''}
+  </div>`;
+}
+
+function renderOutlookInstrumentRow(inst) {
+  const range = inst.nextDayRangePct || {};
+  const badges = (inst.techBadges || []).map(renderOutlookTechBadge).join('');
+  const priceStr =
+    inst.price != null
+      ? `${Number(inst.price).toLocaleString('zh-CN', { maximumFractionDigits: 2 })}${inst.unit ? ` ${escapeHtml(inst.unit)}` : ''}`
+      : '—';
+  const chg =
+    inst.changePct != null
+      ? `<span class="outlook-inst-chg ${inst.changePct >= 0 ? 'up' : 'down'}">${inst.changePct >= 0 ? '+' : ''}${Number(inst.changePct).toFixed(2)}%</span>`
+      : '';
+
+  return `<article class="outlook-instrument-row ${outlookDirectionClass(inst.direction)}" data-outlook-instrument="${escapeAttr(inst.id)}">
+    <button type="button" class="outlook-instrument-main" data-action="toggle-outlook-instrument" aria-expanded="false">
+      <div class="outlook-inst-col outlook-inst-name">
+        <span class="outlook-inst-title">${escapeHtml(inst.name || inst.id)}</span>
+        <span class="outlook-inst-ex">${escapeHtml(inst.exchange || '')}</span>
+      </div>
+      <div class="outlook-inst-col outlook-inst-price">${priceStr} ${chg}</div>
+      <div class="outlook-inst-col outlook-inst-range">
+        <span class="outlook-range-label">次日区间</span>
+        <span class="outlook-range-value ${outlookDirectionClass(range.bias)}">${formatOutlookRangePct(range)}</span>
+        <span class="outlook-range-bias">${escapeHtml(range.biasArrow || '')} ${escapeHtml(range.biasLabel || '')}</span>
+      </div>
+      <div class="outlook-inst-col outlook-inst-dir">
+        <span class="outlook-dir-arrow">${escapeHtml(inst.directionArrow || '→')}</span>
+        <span class="outlook-dir-label">${escapeHtml(inst.directionLabel || '')}</span>
+        <span class="outlook-stars">${escapeHtml(inst.starsHtml || '')}</span>
+      </div>
+      <div class="outlook-inst-col outlook-inst-badges">${badges || '<span class="outlook-tech-badge outlook-badge-flat">数据积累</span>'}</div>
+      <span class="outlook-expand-icon" aria-hidden="true">▸</span>
+    </button>
+    ${renderOutlookInstrumentDetail(inst)}
+  </article>`;
+}
+
 function renderOutlookCategoryCard(cat) {
   return `<article class="outlook-category-card" data-outlook-bucket="${escapeAttr(cat.id)}">
     <header class="outlook-category-head">
@@ -2804,19 +2902,20 @@ function renderOutlookStatsInline(stats) {
   if (!stats) return '';
   return `<div class="policy-stats-inline outlook-stats-inline">
     <span>${escapeHtml(stats.dataQualityLabel || '')}</span>
-    <span>${stats.categoryCount || 4} 大类</span>
-    <span>${stats.factorCount || 7} 因子</span>
+    <span>${stats.instrumentCount || 0} 品种</span>
+    <span>${stats.factorCount || 7} 宏观因子</span>
   </div>`;
 }
 
 function getOutlookCachedSource() {
-  if (!window.__outlookCacheCategories?.length) return null;
+  if (!window.__outlookCacheCategories?.length && !window.__outlookCacheInstruments?.length) return null;
   return {
     categories: window.__outlookCacheCategories,
+    instruments: window.__outlookCacheInstruments,
     factors: window.__outlookCacheFactors,
     framework: window.__outlookCacheFramework,
     stats: window.__outlookCacheStats,
-    dataLabel: '大宗商品走势研判 · 多因子规则评分 · 短/中/长期展望',
+    dataLabel: '大宗商品走势研判 · 逐品种多因子 · 次日波动区间',
     liveRefreshedAt: window.__outlookCacheLiveAt,
     updatedAt: window.__outlookCacheUpdatedAt,
   };
@@ -2825,8 +2924,9 @@ function getOutlookCachedSource() {
 function cacheOutlookSource(source) {
   if (!source) return;
   if (source.error) window.__outlookLoadError = source.error;
-  if (!source.categories?.length) return;
+  if (!source.categories?.length && !source.instruments?.length) return;
   window.__outlookCacheCategories = source.categories;
+  window.__outlookCacheInstruments = source.instruments;
   window.__outlookCacheFactors = source.factors;
   window.__outlookCacheFramework = source.framework;
   window.__outlookCacheStats = source.stats;
@@ -2866,7 +2966,7 @@ function renderOutlookPlaceholder(source = {}) {
 function mountOutlookPanel(source) {
   const panel = document.getElementById('panel-outlook');
   if (!panel) return;
-  if (source?.categories?.length) {
+  if (source?.instruments?.length || source?.categories?.length) {
     cacheOutlookSource(source);
     if (isOutlookPanelPlaceholder(panel)) {
       replaceSinglePanel('outlook', source);
@@ -2894,7 +2994,7 @@ async function refreshOutlookLive(options = {}) {
       if (isActivePanel('outlook')) mountOutlookPanel(outlook);
       return;
     }
-    if (outlook?.categories?.length) {
+    if (outlook?.instruments?.length || outlook?.categories?.length) {
       applyOutlookLiveData(outlook);
       return;
     }
@@ -2908,9 +3008,12 @@ async function refreshOutlookLive(options = {}) {
 
 async function activateOutlookTab() {
   const cached = getOutlookCachedSource();
-  if (cached?.categories?.length) {
+  if (cached?.instruments?.length) {
     mountOutlookPanel(cached);
     return;
+  }
+  if (cached?.categories?.length) {
+    mountOutlookPanel(cached);
   }
   const panel = document.getElementById('panel-outlook');
   if (panel && isOutlookPanelPlaceholder(panel)) {
@@ -2919,7 +3022,7 @@ async function activateOutlookTab() {
   const slowTimer = setTimeout(() => {
     if (!isActivePanel('outlook')) return;
     const p = document.getElementById('panel-outlook');
-    if (p && isOutlookPanelPlaceholder(p) && !getOutlookCachedSource()) {
+    if (p && isOutlookPanelPlaceholder(p) && !getOutlookCachedSource()?.instruments?.length) {
       window.__outlookEmptyReady = true;
       mountOutlookPanel({ _placeholder: 'empty' });
     }
@@ -2932,7 +3035,7 @@ async function activateOutlookTab() {
 }
 
 function renderOutlookPanel(source) {
-  const hasData = source.categories?.length;
+  const hasData = source.instruments?.length || source.categories?.length;
   const liveTag = source.liveRefreshedAt
     ? `<span class="policy-live-tag policy-live-badge outlook-live-tag"><span class="policy-live-dot"></span>实时 ${formatDate(source.liveRefreshedAt)}</span>`
     : '';
@@ -2942,12 +3045,15 @@ function renderOutlookPanel(source) {
   }
 
   window.__outlookCacheCategories = source.categories;
+  window.__outlookCacheInstruments = source.instruments;
   window.__outlookCacheFactors = source.factors;
   window.__outlookCacheFramework = source.framework;
   window.__outlookCacheStats = source.stats;
 
-  const categoryCards = source.categories.map(renderOutlookCategoryCard).join('');
+  const instruments = source.instruments || [];
+  const instrumentRows = instruments.map(renderOutlookInstrumentRow).join('');
   const factorCards = (source.factors || []).map(renderOutlookFactorCard).join('');
+  const categoryCards = (source.categories || []).map(renderOutlookCategoryCard).join('');
 
   return `<div class="panel ${activeTab === 'outlook' ? 'active' : ''}" id="panel-outlook" role="tabpanel">
     <div class="policy-panel policy-reading-v2 outlook-panel">
@@ -2959,17 +3065,27 @@ function renderOutlookPanel(source) {
         ${liveTag}
       </header>
       <div class="outlook-framework-bar geo-framework-bar">
-        <p class="outlook-framework-intro geo-framework-intro">${escapeHtml(source.framework?.logicModel || '多因子规则评分')}</p>
+        <p class="outlook-framework-intro geo-framework-intro">${escapeHtml(source.framework?.logicModel || '多因子+技术面')}</p>
       </div>
-      <section class="outlook-section">
-        <h3 class="outlook-section-title">四大类 outlook 总览</h3>
-        <div class="outlook-category-grid">${categoryCards}</div>
+      <section class="outlook-section outlook-section-primary">
+        <div class="outlook-section-head">
+          <h3 class="outlook-section-title">逐品种研判 · 次日波动区间</h3>
+          <span class="outlook-section-meta">${instruments.length} 品种 · 点击展开详情</span>
+        </div>
+        <div class="outlook-instrument-head-row" aria-hidden="true">
+          <span>品种</span><span>现价</span><span>次日区间</span><span>方向</span><span>技术标签</span><span></span>
+        </div>
+        <div class="outlook-instrument-list" data-outlook-instrument-count="${instruments.length}">${instrumentRows}</div>
       </section>
       <section class="outlook-section">
-        <h3 class="outlook-section-title">因子分解</h3>
+        <h3 class="outlook-section-title">宏观因子分解</h3>
         <div class="outlook-factor-grid">${factorCards}</div>
       </section>
-      <p class="policy-note outlook-note">规则加权 v1 · 美股/美元/政策/气候/地缘/美联储/日央行 · 非 ML 预测 · 仅供参考</p>
+      <section class="outlook-section outlook-section-secondary">
+        <h3 class="outlook-section-title">四大类 outlook 参考</h3>
+        <div class="outlook-category-grid">${categoryCards}</div>
+      </section>
+      <p class="policy-note outlook-note">v1.15 多因子+技术面 · BOLL(20,2)/MA/量比/持仓Δ · 区间非精确预测 · K线≥20根时指标完整 · 仅供参考</p>
     </div>
   </div>`;
 }
@@ -2978,12 +3094,13 @@ function refreshOutlookPanelSections(panel, source) {
   if (!panel || !isActivePanel('outlook')) return;
   const data = source || {
     categories: window.__outlookCacheCategories || [],
+    instruments: window.__outlookCacheInstruments || [],
     factors: window.__outlookCacheFactors || [],
     framework: window.__outlookCacheFramework,
     stats: window.__outlookCacheStats,
-    dataLabel: '大宗商品走势研判 · 多因子规则评分 · 短/中/长期展望',
+    dataLabel: '大宗商品走势研判 · 逐品种多因子 · 次日波动区间',
   };
-  if (!data.categories?.length) return;
+  if (!data.instruments?.length && !data.categories?.length) return;
 
   const headMain = panel.querySelector('.policy-reading-head-main');
   if (headMain) {
@@ -2996,8 +3113,21 @@ function refreshOutlookPanelSections(panel, source) {
     frameworkIntro.textContent = data.framework.logicModel;
   }
 
+  const instList = panel.querySelector('.outlook-instrument-list');
+  if (instList && data.instruments?.length) {
+    const hash = hashListInputs([
+      'outlook-inst',
+      data.instruments.map((i) => `${i.id}:${i.direction}:${i.nextDayRangePct?.low}:${i.nextDayRangePct?.high}`).join(','),
+    ]);
+    if (instList.dataset.listHash !== hash) {
+      instList.dataset.listHash = hash;
+      instList.innerHTML = data.instruments.map(renderOutlookInstrumentRow).join('');
+      instList.dataset.outlookInstrumentCount = String(data.instruments.length);
+    }
+  }
+
   const catGrid = panel.querySelector('.outlook-category-grid');
-  if (catGrid) {
+  if (catGrid && data.categories?.length) {
     const hash = hashListInputs(['outlook-cat', data.categories.map((c) => `${c.id}:${c.short?.direction}`).join(',')]);
     if (catGrid.dataset.listHash !== hash) {
       catGrid.dataset.listHash = hash;
@@ -3014,7 +3144,7 @@ function refreshOutlookPanelSections(panel, source) {
     }
   }
 
-  updateNavTabBadge('outlook', null);
+  updateNavTabBadge('outlook', data.instruments?.length || data.categories?.length || null);
 }
 
 const refreshOutlookPanelSectionsDebounced = debounce(refreshOutlookPanelSections, FILTER_DEBOUNCE_MS);
@@ -3024,13 +3154,25 @@ function setupOutlookPanel() {
   if (!panel || panel.dataset.outlookSetup === '1') return;
   panel.dataset.outlookSetup = '1';
   panel.addEventListener('click', (e) => {
-    const btn = e.target.closest('[data-action="retry-outlook"]');
-    if (!btn) return;
+    const retryBtn = e.target.closest('[data-action="retry-outlook"]');
+    if (retryBtn) {
+      e.preventDefault();
+      window.__outlookLoadError = null;
+      window.__outlookEmptyReady = false;
+      replaceSinglePanel('outlook', {});
+      void refreshOutlookLive({ force: true });
+      return;
+    }
+    const toggleBtn = e.target.closest('[data-action="toggle-outlook-instrument"]');
+    if (!toggleBtn) return;
     e.preventDefault();
-    window.__outlookLoadError = null;
-    window.__outlookEmptyReady = false;
-    replaceSinglePanel('outlook', {});
-    void refreshOutlookLive({ force: true });
+    const row = toggleBtn.closest('.outlook-instrument-row');
+    const detail = row?.querySelector('.outlook-instrument-detail');
+    if (!detail) return;
+    const expanded = toggleBtn.getAttribute('aria-expanded') === 'true';
+    toggleBtn.setAttribute('aria-expanded', expanded ? 'false' : 'true');
+    detail.hidden = expanded;
+    row.classList.toggle('outlook-instrument-expanded', !expanded);
   });
 }
 
@@ -3040,12 +3182,12 @@ function applyOutlookLiveData(source) {
     if (isActivePanel('outlook') && !rendererPaused) mountOutlookPanel(source);
     return;
   }
-  if (!source?.categories?.length) return;
+  if (!source?.instruments?.length && !source?.categories?.length) return;
 
   cacheOutlookSource(source);
 
   if (!isActivePanel('outlook')) {
-    updateNavTabBadge('outlook', source.categories.length);
+    updateNavTabBadge('outlook', source.instruments?.length || source.categories?.length);
     return;
   }
   if (rendererPaused) return;

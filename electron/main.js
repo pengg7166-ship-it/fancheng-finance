@@ -546,12 +546,12 @@ ipcMain.handle('fetch-outlook-live', async (_event, options = {}) => {
     const sources = getCachedAllData()?.sources;
     return await withIpcTimeout(
       fetchCommodityOutlookLive({ force: options.force !== false, sources }),
-      8000,
+      15000,
       '大宗走势研判更新超时'
     );
   } catch (err) {
     const cached = require('../services/commodity-outlook-engine').getCachedCommodityOutlookSource();
-    if (cached?.categories?.length) return { ...cached, fromCache: true };
+    if (cached?.instruments?.length || cached?.categories?.length) return { ...cached, fromCache: true };
     return { error: localizeErrorMessage(err.message || '大宗走势研判更新失败') };
   }
 });

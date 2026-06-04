@@ -71,6 +71,17 @@ function registerIpc() {
     const { fetchIndexHistory } = require('../services/history-fetcher');
     return fetchIndexHistory(id, tf);
   });
+  ipcMain.handle('fetch-outlook-live', async (_event, options = {}) => {
+    try {
+      const { fetchCommodityOutlookLive } = require('../services/commodity-outlook-engine');
+      const sources = getCachedAllData()?.sources;
+      return await fetchCommodityOutlookLive({ force: options.force !== false, sources });
+    } catch (err) {
+      const cached = require('../services/commodity-outlook-engine').getCachedCommodityOutlookSource();
+      if (cached?.instruments?.length || cached?.categories?.length) return { ...cached, fromCache: true };
+      return { error: localizeErrorMessage(err.message || '大宗走势研判更新失败') };
+    }
+  });
 }
 
 registerIpc();
@@ -107,7 +118,7 @@ app.whenReady().then(async () => {
     (async () => {
       const outlookTab = document.querySelector('.tab[data-tab="outlook"]');
       outlookTab?.click();
-      await new Promise((r) => setTimeout(r, 3500));
+      await new Promise((r) => setTimeout(r, 6000));
       const panels = document.getElementById('panels');
       const panelIds = [...document.querySelectorAll('.panel')].map(p => p.id);
       const activePanel = document.querySelector('.panel.active');
@@ -121,6 +132,8 @@ app.whenReady().then(async () => {
         activePanel: activePanel?.id,
         activeText: activePanel?.innerText?.slice(0, 160),
         outlookHasContent: Boolean(outlookPanel?.querySelector('.outlook-panel')),
+        outlookHasInstruments: Boolean(outlookPanel?.querySelector('.outlook-instrument-row')),
+        outlookInstrumentCount: outlookPanel?.querySelectorAll('.outlook-instrument-row').length || 0,
         outlookStuckLoading: /正在加载大宗走势研判/.test(outlookText),
         outlookText: outlookText.slice(0, 220),
         errorBanner: document.getElementById('errorBanner')?.innerText,

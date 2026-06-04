@@ -167,7 +167,7 @@ const SOURCES = {
   },
   outlook: {
     name: '大宗走势研判',
-    dataLabel: '大宗商品走势研判 · 多因子规则评分 · 短/中/长期展望',
+    dataLabel: '大宗商品走势研判 · 逐品种多因子 · 次日波动区间',
   },
   boj: {
     name: '日本央行',
@@ -275,6 +275,7 @@ function emptySource(key) {
         : undefined,
     pairs: key === 'forex' ? [] : undefined,
     categories: key === 'outlook' ? [] : undefined,
+    instruments: key === 'outlook' ? [] : undefined,
     factors: key === 'outlook' ? [] : undefined,
     items: key === 'policy' || key === 'geopolitics' || key === 'climate' ? [] : undefined,
     dataLabel: SOURCES[key].dataLabel,
@@ -447,6 +448,7 @@ async function refreshAllData() {
       name: SOURCES.outlook.name,
       dataLabel: SOURCES.outlook.dataLabel,
       categories: [],
+      instruments: [],
       factors: [],
       updatedAt: new Date().toISOString(),
     };
