@@ -1,0 +1,923 @@
+/* 政策雷达 / 美联储 / 日本央行 — 阅读优化布局 v1.9 */
+
+.cb-reading-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  max-width: 1200px;
+}
+
+.cb-reading-head,
+.policy-reading-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.cb-reading-title,
+.policy-reading-title {
+  font-size: 20px;
+  font-weight: 700;
+  margin: 0 0 4px;
+}
+
+.cb-reading-sub {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.cb-section-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  margin: 0 0 10px;
+  color: var(--text-muted);
+}
+
+.cb-kpi-strip {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 10px;
+}
+
+.cb-kpi-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px 12px;
+  min-height: 72px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+
+.cb-kpi-label {
+  font-size: 11px;
+  color: var(--text-muted);
+  line-height: 1.3;
+  margin-bottom: 4px;
+}
+
+.cb-kpi-value {
+  font-size: 18px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.2;
+}
+
+.cb-kpi-meta {
+  font-size: 10px;
+  color: var(--text-muted);
+  margin-top: 4px;
+}
+
+.cb-kpi-change {
+  margin-left: 6px;
+}
+
+.cb-reading-tabs,
+.policy-view-tabs {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+
+.cb-reading-tab,
+.policy-view-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text-muted);
+  font-size: 13px;
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s, color 0.12s;
+}
+
+.cb-reading-tab:hover,
+.policy-view-tab:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.cb-reading-tab.active,
+.policy-view-tab.active {
+  border-color: var(--accent);
+  color: var(--text);
+  background: rgba(56, 189, 248, 0.08);
+}
+
+.cb-tab-count {
+  display: inline-flex;
+  min-width: 20px;
+  justify-content: center;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.06);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.cb-reading-pane {
+  display: none;
+}
+
+.cb-reading-pane.active {
+  display: block;
+}
+
+.cb-reading-panes,
+.policy-reading-scroll {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  max-height: calc(100vh - 340px);
+  overflow-y: auto;
+}
+
+.policy-reading-scroll {
+  max-height: calc(100vh - 300px);
+}
+
+.reading-list,
+.policy-reading-list {
+  list-style: none;
+}
+
+.reading-row,
+.policy-reading-row {
+  display: grid;
+  grid-template-columns: 32px 72px 1fr 28px;
+  gap: 12px;
+  align-items: start;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+  transition: background 0.12s;
+}
+
+.reading-row:hover,
+.policy-reading-row:hover {
+  background: var(--surface-hover);
+}
+
+.reading-row:last-child,
+.policy-reading-row:last-child {
+  border-bottom: none;
+}
+
+.reading-row-idx {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  padding-top: 3px;
+  opacity: 0.7;
+}
+
+.reading-row-date {
+  font-size: 12px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  padding-top: 2px;
+}
+
+.reading-row-main,
+.policy-reading-main {
+  min-width: 0;
+}
+
+.reading-row-head,
+.policy-reading-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.reading-row-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.reading-badge-speech {
+  background: rgba(56, 189, 248, 0.12);
+  color: #38bdf8;
+}
+
+.reading-badge-news {
+  background: rgba(148, 163, 184, 0.12);
+  color: #94a3b8;
+}
+
+.reading-badge-commodity {
+  background: rgba(249, 115, 22, 0.15);
+  color: #fb923c;
+}
+
+.reading-row-title,
+.policy-reading-title {
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.45;
+  margin: 0;
+}
+
+.policy-reading-row-title {
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.45;
+  margin: 0;
+}
+
+.reading-row-summary,
+.policy-reading-summary {
+  font-size: 12px;
+  color: var(--text-muted);
+  line-height: 1.5;
+  margin: 6px 0 0;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.policy-reading-impact {
+  font-size: 12px;
+  margin: 8px 0 0;
+  line-height: 1.45;
+}
+
+.reading-row-official,
+.reading-row-topic {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.reading-row-action {
+  color: var(--text-muted);
+  opacity: 0.5;
+  padding-top: 2px;
+}
+
+.reading-stars-5 { border-left: 3px solid #ef4444; }
+.reading-stars-4 { border-left: 3px solid #f97316; }
+.reading-stars-3 { border-left: 3px solid #eab308; }
+.reading-stars-2 { border-left: 3px solid var(--border); }
+.reading-stars-1 { border-left: 3px solid var(--border); opacity: 0.92; }
+
+.policy-reading-row-commodity {
+  border-left: 3px solid var(--policy);
+}
+
+.cb-reading-note {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin: 0;
+}
+
+/* 政策雷达 v2 */
+.policy-reading-v2 {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.policy-reading-head-main {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.policy-stats-inline {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.policy-stats-inline strong {
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+.policy-stat-warn-inline strong {
+  color: #fb923c;
+}
+
+.policy-reading-toolbar {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--bg);
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.policy-reading-toolbar .policy-dept-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  max-height: none;
+  overflow: visible;
+}
+
+.policy-commodity-chips-inline {
+  margin-top: 0;
+}
+
+.policy-toolbar-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.policy-reading-v2 .policy-commodity-zone {
+  margin: 0;
+}
+
+.policy-commodity-zone-focus {
+  box-shadow:
+    0 0 0 2px rgba(251, 191, 36, 0.45),
+    0 12px 40px rgba(0, 0, 0, 0.35);
+}
+
+.policy-stat-commodity-inline {
+  border: none;
+  background: rgba(251, 191, 36, 0.1);
+  color: #fcd34d;
+  border-radius: 999px;
+  padding: 2px 10px;
+  font-size: 12px;
+  cursor: pointer;
+  transition: background 0.18s ease;
+}
+
+.policy-stat-commodity-inline:hover {
+  background: rgba(251, 191, 36, 0.2);
+}
+
+.policy-stat-commodity-inline strong {
+  color: #fcd34d;
+}
+
+.policy-feed-divider {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 4px 2px 0;
+  border-top: 1px solid var(--border);
+  margin-top: 4px;
+}
+
+.policy-feed-divider-title {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.policy-feed-divider-desc {
+  margin: 4px 0 0;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.policy-feed-divider-count {
+  font-size: 12px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.policy-commodity-view-hint {
+  padding: 24px 16px;
+  text-align: center;
+  font-size: 13px;
+  color: var(--text-muted);
+  border: 1px dashed var(--border);
+  border-radius: 12px;
+}
+
+.policy-reading-scroll-hidden {
+  display: none;
+}
+
+.policy-exchange-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.policy-exchange-tab {
+  border: 1px solid rgba(251, 191, 36, 0.2);
+  background: rgba(0, 0, 0, 0.2);
+  color: var(--text-muted);
+  border-radius: 999px;
+  padding: 5px 12px;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.policy-exchange-tab span {
+  margin-left: 6px;
+  opacity: 0.7;
+  font-variant-numeric: tabular-nums;
+}
+
+.policy-exchange-tab.active {
+  border-color: rgba(251, 191, 36, 0.55);
+  background: rgba(251, 191, 36, 0.12);
+  color: #fcd34d;
+}
+
+.policy-commodity-chips-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  max-height: 220px;
+  overflow-y: auto;
+  padding: 4px 2px 8px;
+}
+
+.policy-commodity-chip-empty {
+  opacity: 0.55;
+}
+
+.policy-chip-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: 6px;
+  font-size: 10px;
+}
+
+.policy-chip-meta b {
+  color: #fcd34d;
+  font-weight: 700;
+}
+
+.policy-chip-meta i {
+  font-style: normal;
+  padding: 1px 4px;
+  border-radius: 3px;
+  font-size: 9px;
+}
+
+.policy-chip-meta i[cn] {
+  background: rgba(56, 189, 248, 0.15);
+  color: #38bdf8;
+}
+
+.policy-chip-meta i[cn]::before {
+  content: '内';
+}
+
+.policy-chip-meta i[gl] {
+  background: rgba(167, 139, 250, 0.15);
+  color: #a78bfa;
+}
+
+.policy-chip-meta i[gl]::before {
+  content: '外';
+}
+
+.policy-chip-meta i[geo] {
+  background: rgba(168, 85, 247, 0.15);
+  color: #c084fc;
+}
+
+.policy-chip-meta i[geo]::before {
+  content: '缘';
+}
+
+.policy-chip-legend {
+  font-size: 10px;
+  color: var(--text-muted);
+  margin: 0 0 10px;
+}
+
+.policy-chip-legend i[cn],
+.policy-chip-legend i[gl],
+.policy-chip-legend i[geo] {
+  font-style: normal;
+  padding: 1px 5px;
+  border-radius: 3px;
+  margin: 0 2px;
+}
+
+.policy-chip-legend i[cn] {
+  background: rgba(56, 189, 248, 0.12);
+  color: #38bdf8;
+}
+
+.policy-chip-legend i[gl] {
+  background: rgba(167, 139, 250, 0.12);
+  color: #a78bfa;
+}
+
+.policy-chip-legend i[geo] {
+  background: rgba(168, 85, 247, 0.12);
+  color: #c084fc;
+}
+
+.policy-commodity-row-geo .pcol-scholar {
+  display: block;
+  font-size: 11px;
+  color: #c4b5fd;
+  margin-top: 4px;
+  line-height: 1.35;
+}
+
+.reading-badge-geo {
+  background: rgba(168, 85, 247, 0.18);
+  color: #d8b4fe;
+}
+
+.geo-commodity-tags .geo-commodity-tag {
+  cursor: pointer;
+  border: 1px solid rgba(251, 191, 36, 0.35);
+}
+
+.geo-commodity-tags .geo-commodity-tag:hover {
+  background: rgba(251, 191, 36, 0.12);
+}
+
+.policy-zone-stats-mini {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin: 6px 0 0;
+}
+
+.policy-commodity-subblock {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid rgba(251, 191, 36, 0.12);
+}
+
+.policy-commodity-subhead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.policy-commodity-subhead h4 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: #fcd34d;
+}
+
+.policy-commodity-subhead-policy h4 {
+  color: #fbbf24;
+}
+
+.policy-commodity-subhead span {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.policy-commodity-subdesc {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin: 0 0 8px;
+}
+
+.policy-commodity-empty-inline {
+  padding: 16px;
+  font-size: 12px;
+}
+
+.policy-commodity-row-news {
+  cursor: pointer;
+}
+
+.policy-commodity-row-news:hover {
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.policy-commodity-refresh {
+  margin-left: 12px;
+  border: 1px solid rgba(251, 191, 36, 0.35);
+  background: rgba(251, 191, 36, 0.08);
+  color: #fcd34d;
+  border-radius: 999px;
+  padding: 4px 12px;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.policy-commodity-refresh:hover {
+  background: rgba(251, 191, 36, 0.16);
+}
+
+.policy-chip-meta b[p] {
+  color: #fbbf24;
+  font-weight: 600;
+}
+
+.policy-chip-meta b[p]::before {
+  content: '政';
+  font-size: 9px;
+  margin-right: 1px;
+}
+
+.policy-loading-dot {
+  color: #fcd34d;
+  animation: policy-pulse 1s ease infinite;
+}
+
+@keyframes policy-pulse {
+  50% { opacity: 0.45; }
+}
+
+@media (max-width: 768px) {
+  .reading-row,
+  .policy-reading-row {
+    grid-template-columns: 24px 1fr 20px;
+  }
+
+  .reading-row-date {
+    grid-column: 2;
+    margin-top: -4px;
+    margin-bottom: 4px;
+  }
+
+  .reading-row-main,
+  .policy-reading-main {
+    grid-column: 2;
+  }
+
+  .reading-row-idx {
+    grid-row: 1 / span 2;
+  }
+
+  .reading-row-action {
+    grid-row: 1;
+    grid-column: 3;
+  }
+
+  .cb-kpi-strip {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+/* —— 地缘政治 —— */
+.geo-panel .policy-reading-title {
+  color: var(--geopolitics, #a855f7);
+}
+
+.geo-live-tag .policy-live-dot {
+  background: var(--geopolitics, #a855f7);
+}
+
+.geo-influence-stars {
+  color: #fbbf24;
+  font-size: 11px;
+  letter-spacing: -1px;
+}
+
+.geo-region-pill {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(168, 85, 247, 0.15);
+  color: #d8b4fe;
+}
+
+.geo-topic-tag,
+.geo-topic-main {
+  background: rgba(99, 102, 241, 0.15);
+  color: #a5b4fc;
+}
+
+.geo-country-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.geo-country-tag {
+  font-size: 11px;
+  padding: 3px 8px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.geo-commentary {
+  margin: 10px 0 0;
+  padding: 10px 12px;
+  border-left: 3px solid var(--geopolitics, #a855f7);
+  background: rgba(168, 85, 247, 0.08);
+  border-radius: 0 8px 8px 0;
+  font-size: 12px;
+  line-height: 1.65;
+  color: #cbd5e1;
+}
+
+.geo-badge-commentary {
+  background: rgba(168, 85, 247, 0.25);
+  color: #e9d5ff;
+}
+
+.geo-source-line {
+  margin: 8px 0 0;
+  font-size: 11px;
+  color: #64748b;
+}
+
+.geo-catalog-wrap {
+  padding: 4px 0 16px;
+}
+
+.geo-catalog-section {
+  margin-bottom: 20px;
+}
+
+.geo-catalog-region {
+  font-size: 14px;
+  margin: 0 0 8px;
+  color: #e2e8f0;
+}
+
+.geo-catalog-region span {
+  font-size: 12px;
+  color: #64748b;
+  font-weight: normal;
+}
+
+.geo-catalog-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.geo-catalog-table th,
+.geo-catalog-table td {
+  padding: 8px 10px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  text-align: left;
+}
+
+.geo-catalog-table tr:hover {
+  background: rgba(168, 85, 247, 0.06);
+}
+
+.geo-catalog-filter-btn {
+  font-size: 11px;
+  padding: 3px 10px;
+  border-radius: 6px;
+  border: 1px solid rgba(168, 85, 247, 0.35);
+  background: transparent;
+  color: #d8b4fe;
+  cursor: pointer;
+}
+
+.geo-country-list .policy-dept-btn {
+  max-width: 100%;
+}
+
+.geo-country-list .geo-influence-stars {
+  margin-left: 2px;
+}
+
+.geo-framework-bar {
+  padding: 12px 16px 8px;
+  border-bottom: 1px solid rgba(168, 85, 247, 0.15);
+  background: rgba(168, 85, 247, 0.04);
+}
+
+.geo-framework-intro {
+  margin: 0 0 10px;
+  font-size: 12px;
+  color: #94a3b8;
+}
+
+.geo-dimension-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.geo-dimension-btn {
+  font-size: 12px;
+  padding: 6px 12px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(15, 20, 25, 0.6);
+  color: #e2e8f0;
+  cursor: pointer;
+}
+
+.geo-dimension-btn.active {
+  border-color: var(--geopolitics, #a855f7);
+  background: rgba(168, 85, 247, 0.18);
+}
+
+.geo-dimension-btn span {
+  opacity: 0.7;
+  margin-left: 4px;
+}
+
+.geo-dim-tag {
+  font-size: 10px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  margin-right: 4px;
+}
+
+.geo-dim-tag-ideology { background: rgba(192, 132, 252, 0.2); color: #e9d5ff; }
+.geo-dim-tag-military { background: rgba(239, 68, 68, 0.2); color: #fecaca; }
+.geo-dim-tag-political { background: rgba(59, 130, 246, 0.2); color: #bfdbfe; }
+.geo-dim-tag-economic { background: rgba(34, 197, 94, 0.2); color: #bbf7d0; }
+
+.geo-analysis-block {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.55);
+  border: 1px solid rgba(168, 85, 247, 0.12);
+}
+
+.geo-logic-chain {
+  margin: 8px 0;
+  padding-left: 18px;
+  font-size: 12px;
+  line-height: 1.55;
+  color: #cbd5e1;
+}
+
+.geo-logic-step {
+  margin-bottom: 6px;
+}
+
+.geo-logic-label {
+  display: inline-block;
+  min-width: 2.2em;
+  font-weight: 600;
+  color: #a855f7;
+  margin-right: 6px;
+}
+
+.geo-scholar-block {
+  margin-top: 10px;
+}
+
+.geo-scholar-quote {
+  margin: 0 0 8px;
+  padding: 0;
+}
+
+.geo-scholar-quote blockquote {
+  margin: 0 0 4px;
+  padding: 0 0 0 10px;
+  border-left: 2px solid rgba(251, 191, 36, 0.5);
+  font-size: 12px;
+  line-height: 1.6;
+  color: #fde68a;
+  font-style: normal;
+}
+
+.geo-scholar-quote figcaption {
+  font-size: 11px;
+  color: #64748b;
+}
+
+.geo-scholar-quote em {
+  font-style: normal;
+  color: #475569;
+}
+
+.geo-impact-line {
+  margin: 8px 0 0;
+  font-size: 12px;
+  color: #94a3b8;
+}
+
+.geo-dim-inline .geo-dim-tag {
+  font-size: 10px;
+}

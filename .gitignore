@@ -1,0 +1,15 @@
+node_modules/
+dist/
+dist-*/
+dist-out/
+.env
+*.log
+.DS_Store
+Thumbs.db
+
+# 历史打包/解压备份目录
+_v*/
+_asar-*/
+_check-*/
+_pkg-extract/
+app.js

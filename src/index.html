@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self';" />
+  <title>梵澄金融</title>
+  <link rel="stylesheet" href="styles.css" />
+  <link rel="stylesheet" href="reading-layout.css" />
+</head>
+<body>
+  <div class="app">
+    <header class="header">
+      <div class="brand">
+        <div class="logo">梵</div>
+        <div>
+          <h1>梵澄金融</h1>
+          <p class="subtitle">全球指数 · 大宗商品 · 中美宏观 · 外汇 · 政策雷达 · 地缘政治 · 美联储 · 日本央行 · 美国财政部 · 新华社</p>
+        </div>
+      </div>
+      <div class="header-actions">
+        <span class="last-updated" id="lastUpdated">正在加载…</span>
+        <span class="live-badge hidden" id="liveBadge">● 实时刷新</span>
+        <button class="btn btn-ghost" id="settingsBtn" type="button" title="设置">⚙ 设置</button>
+        <button class="btn btn-primary" id="refreshBtn" type="button">
+          <span class="btn-icon">↻</span> 刷新
+        </button>
+      </div>
+    </header>
+
+    <nav class="tabs" role="tablist">
+      <button class="tab active" data-tab="indices" role="tab">全球指数</button>
+      <button class="tab" data-tab="commodities" role="tab">大宗商品</button>
+      <button class="tab" data-tab="macro" role="tab">中美宏观</button>
+      <button class="tab" data-tab="forex" role="tab">外汇</button>
+      <button class="tab" data-tab="policy" role="tab">政策雷达</button>
+      <button class="tab" data-tab="geopolitics" role="tab">地缘政治</button>
+      <button class="tab" data-tab="fed" role="tab">美联储</button>
+      <button class="tab" data-tab="boj" role="tab">日本央行</button>
+      <button class="tab" data-tab="treasury" role="tab">美国财政部</button>
+      <button class="tab" data-tab="xinhua" role="tab">新华社</button>
+    </nav>
+
+    <main class="content">
+      <div id="loading" class="loading hidden">
+        <div class="spinner"></div>
+        <p>正在加载数据…</p>
+      </div>
+      <div id="panels" class="panels hidden"></div>
+      <div id="errorBanner" class="error-banner hidden"></div>
+    </main>
+
+    <footer class="footer">
+      <span>数据来源：新浪财经 · 新华社 · CNBC · 圣路易斯联储 · 日本央行 · 美国财政部 · 东方财富 · 金十数据</span>
+      <span id="fredHint" class="hint"></span>
+      <span id="appVersion" class="hint">v1.12.2</span>
+    </footer>
+  </div>
+
+  <div id="settingsModal" class="modal hidden" role="dialog" aria-labelledby="settingsTitle">
+    <div class="modal-backdrop" id="settingsBackdrop"></div>
+    <div class="modal-panel">
+      <div class="modal-header">
+        <h2 id="settingsTitle">设置</h2>
+        <button class="modal-close" id="settingsClose" type="button" aria-label="关闭">×</button>
+      </div>
+      <div class="modal-body">
+        <section class="settings-section">
+          <h3>美联储数据接口密钥</h3>
+          <p class="settings-desc">用于获取美联储完整经济指标，在圣路易斯联储官网免费注册后即可申请。</p>
+          <div class="settings-row">
+            <input id="fredApiKeyInput" type="password" placeholder="粘贴 32 位接口密钥" autocomplete="off" />
+            <button class="btn btn-ghost" id="fredApplyBtn" type="button">申请密钥</button>
+          </div>
+          <p class="settings-status" id="fredKeyStatus"></p>
+        </section>
+        <section class="settings-section">
+          <h3>欧洲历史数据密钥</h3>
+          <p class="settings-desc">欧洲、拉美等地指数 K 线需免费历史数据密钥（约 20 年日/月/年开高低收量）。</p>
+          <div class="settings-row">
+            <input id="stooqApiKeyInput" type="password" placeholder="粘贴历史数据接口密钥" autocomplete="off" />
+            <button class="btn btn-ghost" id="stooqApplyBtn" type="button">申请密钥</button>
+          </div>
+          <p class="settings-status" id="stooqKeyStatus"></p>
+        </section>
+        <section class="settings-section">
+          <h3>行情实时刷新</h3>
+          <div class="settings-row">
+            <label for="quoteRefreshSeconds">间隔（秒）</label>
+            <input id="quoteRefreshSeconds" type="number" min="10" max="300" value="30" />
+          </div>
+          <p class="settings-desc">全球指数、大宗商品与 K 线自动增量更新，默认 30 秒</p>
+        </section>
+        <section class="settings-section">
+          <h3>外汇实时刷新</h3>
+          <div class="settings-row">
+            <label for="forexRefreshSeconds">间隔（秒）</label>
+            <input id="forexRefreshSeconds" type="number" min="5" max="60" value="10" />
+          </div>
+          <p class="settings-desc">外汇标签页与后台推送默认 10 秒拉取新浪财经最新报价</p>
+        </section>
+        <section class="settings-section">
+          <h3>政策雷达刷新</h3>
+          <div class="settings-row">
+            <label for="policyRefreshSeconds">间隔（秒）</label>
+            <input id="policyRefreshSeconds" type="number" min="15" max="300" value="30" />
+          </div>
+          <p class="settings-desc">政策雷达标签页与后台推送默认 30 秒抓取最新部委政策</p>
+        </section>
+        <section class="settings-section">
+          <h3>全量刷新</h3>
+          <div class="settings-row">
+            <label for="refreshInterval">间隔（分钟）</label>
+            <input id="refreshInterval" type="number" min="1" max="60" value="5" />
+          </div>
+        </section>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-primary" id="settingsSaveBtn" type="button">保存并刷新</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="i18n.js"></script>
+  <script src="chart.js"></script>
+  <script src="commodities.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
