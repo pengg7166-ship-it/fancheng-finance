@@ -1,5 +1,32 @@
 # 更新日志
 
+## v1.19.0 — 2026-06-04
+
+### 升级：大宗研判动态多情景 + 变更存档
+
+- **双轨波动** `commodity-volatility-model.js`：基线 EMA10/20 + 盘中|涨跌|/放量/高星资讯突变层 → composite σ；不削平合法同日突变，保留板块上限（如 au 1.2%）
+- **四情景** `base` / `bull` / `bear` / `stress`（突变触发：≥4★ 或 shock&gt;1.5×EMA）；主行展示基准，展开显示三行情景 + %
+- **环境 regime**：`riskOn` / `riskOff` / `liquidityPanic` / `supplyShock` / `weatherShock` — 由 VIX、DXY、地缘/气候、持仓放量检测；因子权重 = 档案 × regime 乘数（分解表标注 ×）
+- **实时**：`data-refreshed` / push 指纹变化 → 800ms 合并重算；行内「研判更新 HH:mm:ss」
+- **存档** `commodity-outlook-history.js`：`{FANCHENG_DATA}/data/outlook-history/YYYY-MM-DD.jsonl` + `outlook-snapshots/{id}/latest.json`；实质变更（Δ分≥0.05 / 方向变 / 中心≥0.15%）异步写入；IPC `getOutlookHistory` / `exportOutlookHistory`
+- **UI**：较上次 Δ 分/区间、regime 变更角标、「研判存档」最近 20 条
+- 页脚版本 **v1.19.0**
+
+---
+
+## v1.18.2 — 2026-06-04
+
+### 升级：平滑波动纳入涨跌幅研判
+
+- **波动模型**：σ20 / ATR14 / p90 + `volEma10`（|日收益| EMA）+ `volEma20`（20日σ EMA）；次日预测 = `0.65·volEma10 + 0.35·volEma20`；日线 5–19 根时混合盘中振幅与板块先验；日环比预测 ±15% 封顶（cache 持久化）
+- **波动 regime**：相对 60 日历史分位 → 低波/常态波/高波；纳入 `compositeScore`（volLevel/volTrend/volBias）与方向阈值（高波放宽）
+- **次日区间**：半宽 = 平滑σ预测 × `volMultiplier(tier)`；保留 au ±1.2% 等 v1.17.1 上限；UI 子行「平滑波动 0.38% (10/20 EMA) · 昨日参考 0.35%」
+- **UI**：技术标签 低波/常态波/高波 + σ预测；展开行 σ20/EMA10/forecast；置信星按波动稳定性加权
+- **诊断**：断言 au/cu `volForecastPct` 数值、au 区间 span ≤1.5%
+- 页脚版本 **v1.18.2**
+
+---
+
 ## v1.18.0 — 2026-06-04
 
 ### 升级：大宗走势研判 — 逐品种档案 + 资金关注 + 因子分解

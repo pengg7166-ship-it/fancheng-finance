@@ -6,6 +6,8 @@ const diskCache = require('./disk-cache');
 const { getCommodityMeta } = require('./commodities-catalog');
 
 const OI_SNAP_PREFIX = 'oi-snap/';
+const VOL_FORECAST_PREFIX = 'outlook-vol-forecast/';
+const VOL_FORECAST_CAP_RATIO = 0.15;
 
 function clamp(n, min, max) {
   return Math.max(min, Math.min(max, n));
@@ -291,6 +293,156 @@ function computeRealizedVolPct(bars) {
   return std > 0 ? +Math.max(0.1, std).toFixed(3) : null;
 }
 
+function computeRollingSigmaSeries(returns, window = 20) {
+  if (!returns?.length || returns.length < window) return [];
+  const sigmas = [];
+  for (let i = window; i <= returns.length; i += 1) {
+    const slice = returns.slice(i - window, i);
+    const mean = slice.reduce((s, r) => s + r, 0) / window;
+    const variance = slice.reduce((s, r) => s + (r - mean) ** 2, 0) / window;
+    sigmas.push(Math.sqrt(variance));
+  }
+  return sigmas;
+}
+
+function readPrevVolForecast(commodityId) {
+  const key = `${VOL_FORECAST_PREFIX}${String(commodityId || '').toLowerCase()}.json`;
+  const stored = diskCache.readStale(key);
+  const v = stored?.data?.volForecastPct;
+  return v != null && !Number.isNaN(Number(v)) ? Number(v) : null;
+}
+
+function writeVolForecast(commodityId, volForecastPct) {
+  if (volForecastPct == null || Number.isNaN(Number(volForecastPct))) return;
+  const key = `${VOL_FORECAST_PREFIX}${String(commodityId || '').toLowerCase()}.json`;
+  diskCache.write(key, { data: { volForecastPct: +Number(volForecastPct).toFixed(4), savedAt: Date.now() } });
+}
+
+function capVolForecastDayOverDay(rawForecast, prevForecast) {
+  if (prevForecast == null || prevForecast <= 0 || rawForecast == null) return rawForecast;
+  const lo = prevForecast * (1 - VOL_FORECAST_CAP_RATIO);
+  const hi = prevForecast * (1 + VOL_FORECAST_CAP_RATIO);
+  return +clamp(rawForecast, lo, hi).toFixed(4);
+}
+
+function classifyVolRegime(percentile) {
+  if (percentile == null || Number.isNaN(percentile)) {
+    return { regime: 'normal', label: '常态波', trend: 'flat' };
+  }
+  if (percentile < 33) return { regime: 'low', label: '低波', trend: 'down' };
+  if (percentile > 66) return { regime: 'high', label: '高波', trend: 'up' };
+  return { regime: 'normal', label: '常态波', trend: 'flat' };
+}
+
+function computeSmoothedVolMetrics(bars, { intraday, sectorPrior, commodityId } = {}) {
+  const closes = (bars || []).map((b) => b.close).filter((c) => c > 0);
+  const barCount = closes.length;
+  const prior = sectorPrior ?? 0.75;
+
+  if (barCount < 3) {
+    const intradayProxy = intraday?.atrProxyPct ?? intraday?.rangePct;
+    const rawForecast = intradayProxy != null ? intradayProxy * 0.55 + prior * 0.45 : prior;
+    const prevForecast = commodityId ? readPrevVolForecast(commodityId) : null;
+    let volForecastPct = capVolForecastDayOverDay(Math.max(0.1, rawForecast), prevForecast) ?? Math.max(0.1, rawForecast);
+    if (commodityId && volForecastPct > 0) writeVolForecast(commodityId, volForecastPct);
+    const regimeInfo = classifyVolRegime(50);
+    return {
+      sigma20: +prior.toFixed(4),
+      atr14Pct: intradayProxy != null ? +intradayProxy.toFixed(4) : null,
+      p90AbsReturn: null,
+      volEma10: null,
+      volEma20: null,
+      volForecastPct: +volForecastPct.toFixed(4),
+      rawForecastPct: +rawForecast.toFixed(4),
+      prevForecastPct: prevForecast != null ? +prevForecast.toFixed(4) : null,
+      volRising: false,
+      volFalling: false,
+      volStability: null,
+      percentile: 50,
+      regime: regimeInfo.regime,
+      regimeLabel: regimeInfo.label,
+      regimeTrend: regimeInfo.trend,
+      forecastCapped: prevForecast != null && Math.abs(volForecastPct - rawForecast) > 0.0001,
+      barsUsed: barCount,
+      priorBlend: true,
+      display: `先验 ${prior.toFixed(2)}% · 预测 ${volForecastPct.toFixed(2)}%`,
+    };
+  }
+
+  const returns = computeDailyReturns(closes);
+  const absReturns = returns.map((r) => Math.abs(r));
+  const histWindow = Math.min(60, absReturns.length);
+  const histAbs = absReturns.slice(-histWindow);
+
+  const volEma10 = absReturns.length >= 5 ? ema(absReturns, Math.min(10, absReturns.length)) : null;
+  const sigmaSeries = computeRollingSigmaSeries(returns, Math.min(20, returns.length));
+  const volEma20 =
+    sigmaSeries.length >= 5
+      ? ema(sigmaSeries, Math.min(20, sigmaSeries.length))
+      : volEma10;
+
+  let rawForecast = null;
+  if (volEma10 != null && volEma20 != null) {
+    rawForecast = 0.65 * volEma10 + 0.35 * volEma20;
+  } else if (volEma10 != null) {
+    rawForecast = volEma10;
+  } else if (volEma20 != null) {
+    rawForecast = volEma20;
+  }
+
+  const historical = computeHistoricalVolMetrics(bars);
+  const sigma20 = historical?.sigmaDaily20 ?? volEma20 ?? volEma10;
+  const atr14Pct = historical?.atrPct14;
+  const p90AbsReturn = historical?.absReturnP90;
+
+  if (barCount >= 5 && barCount < 20 && rawForecast != null) {
+    const intradayProxy = intraday?.atrProxyPct ?? intraday?.rangePct ?? prior;
+    const blendWeight = barCount / 20;
+    rawForecast = blendWeight * rawForecast + (1 - blendWeight) * (intradayProxy * 0.4 + prior * 0.6);
+  } else if (rawForecast == null) {
+    const intradayProxy = intraday?.atrProxyPct ?? intraday?.rangePct;
+    rawForecast = intradayProxy != null ? intradayProxy * 0.55 + prior * 0.45 : prior;
+  }
+
+  rawForecast = Math.max(0.1, rawForecast);
+
+  const prevForecast = commodityId ? readPrevVolForecast(commodityId) : null;
+  let volForecastPct = capVolForecastDayOverDay(rawForecast, prevForecast);
+  if (volForecastPct == null) volForecastPct = rawForecast;
+
+  if (commodityId && volForecastPct > 0) {
+    writeVolForecast(commodityId, volForecastPct);
+  }
+
+  const percentile =
+    histAbs.length >= 5 && volForecastPct > 0
+      ? (histAbs.filter((v) => v <= volForecastPct).length / histAbs.length) * 100
+      : 50;
+  const regimeInfo = classifyVolRegime(percentile);
+  const volStability = volEma10 != null && volEma20 != null ? Math.abs(volEma10 - volEma20) : null;
+
+  return {
+    sigma20: sigma20 != null ? +sigma20.toFixed(4) : null,
+    atr14Pct: atr14Pct != null ? +atr14Pct.toFixed(4) : null,
+    p90AbsReturn: p90AbsReturn != null ? +p90AbsReturn.toFixed(4) : null,
+    volEma10: volEma10 != null ? +volEma10.toFixed(4) : null,
+    volEma20: volEma20 != null ? +volEma20.toFixed(4) : null,
+    volForecastPct: +volForecastPct.toFixed(4),
+    rawForecastPct: +rawForecast.toFixed(4),
+    prevForecastPct: prevForecast != null ? +prevForecast.toFixed(4) : null,
+    volRising: volEma10 != null && volEma20 != null && volEma10 > volEma20 * 1.01,
+    volFalling: volEma10 != null && volEma20 != null && volEma10 < volEma20 * 0.99,
+    volStability: volStability != null ? +volStability.toFixed(4) : null,
+    percentile: +percentile.toFixed(1),
+    regime: regimeInfo.regime,
+    regimeLabel: regimeInfo.label,
+    regimeTrend: regimeInfo.trend,
+    forecastCapped: prevForecast != null && Math.abs(volForecastPct - rawForecast) > 0.0001,
+    barsUsed: barCount,
+    display: `σ20 ${(sigma20 ?? volForecastPct).toFixed(2)}% · EMA10 ${(volEma10 ?? '—')}${typeof volEma10 === 'number' ? '%' : ''} · 预测 ${volForecastPct.toFixed(2)}%`,
+  };
+}
+
 function mergeLiveBar(bars, liveQuote) {
   if (!liveQuote?.price || Number.isNaN(Number(liveQuote.price))) return bars;
   const price = Number(liveQuote.price);
@@ -421,7 +573,7 @@ function computeVolatilityProxy({ historicalVol, intraday, liveQuote }) {
   return Math.max(0.12, 0.15 + chg * 0.25);
 }
 
-function analyzeInstrumentTechnicals(commodityId, liveQuote = null) {
+function analyzeInstrumentTechnicals(commodityId, liveQuote = null, options = {}) {
   const meta = getCommodityMeta(commodityId);
   if (!meta) return null;
 
@@ -446,7 +598,12 @@ function analyzeInstrumentTechnicals(commodityId, liveQuote = null) {
   const oi = updateOiSnapshot(commodityId, liveQuote?.openInterest);
   const historicalVol = computeHistoricalVolMetrics(bars);
   const realizedVolPct = computeRealizedVolPct(bars);
-  const volatilityProxy = computeVolatilityProxy({ historicalVol, liveQuote, intraday });
+  const smoothedVol = computeSmoothedVolMetrics(bars, {
+    intraday,
+    sectorPrior: options.sectorPrior,
+    commodityId: meta.id,
+  });
+  const volatilityProxy = smoothedVol?.volForecastPct ?? computeVolatilityProxy({ historicalVol, liveQuote, intraday });
   const techScore = technicalScoreFromIndicators({ boll, maStack, volume, oi, intraday });
 
   let sourceNote = null;
@@ -471,6 +628,7 @@ function analyzeInstrumentTechnicals(commodityId, liveQuote = null) {
     intraday,
     historicalVol,
     realizedVolPct,
+    smoothedVol,
     volatilityProxy,
     techScore,
     sourceNote,
@@ -487,7 +645,11 @@ module.exports = {
   computeDailyReturns,
   computeHistoricalVolMetrics,
   computeRealizedVolPct,
+  computeSmoothedVolMetrics,
   computeVolatilityProxy,
+  readPrevVolForecast,
+  writeVolForecast,
+  capVolForecastDayOverDay,
   readCachedKlines,
   hasCachedDayKlines,
   mergeLiveBar,

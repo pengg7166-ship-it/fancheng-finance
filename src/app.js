@@ -46,6 +46,7 @@ const VIRTUAL_ROW_ESTIMATE = 112;
 const VIRTUAL_OVERSCAN = 4;
 const VIRTUAL_MAX_ROWS = 32;
 const FILTER_DEBOUNCE_MS = 450;
+const OUTLOOK_DEBOUNCE_MS = 800;
 
 let activeTab = 'indices';
 let selectedIndexId = 'sp500';
@@ -2773,6 +2774,10 @@ function renderOutlookHorizonCell(h) {
   </div>`;
 }
 
+function getOutlookBaseRange(inst) {
+  return inst?.scenarios?.base || inst?.nextDayRangePct || {};
+}
+
 function formatOutlookRangePct(range) {
   if (!range) return '—';
   const low = Number(range.low);
@@ -2782,14 +2787,62 @@ function formatOutlookRangePct(range) {
   return `${sign(low)}% ~ ${sign(high)}%`;
 }
 
+function formatOutlookScenarioRow(key, sc) {
+  if (!sc) return '';
+  const labels = { base: '基准', bull: '偏多', bear: '偏空', stress: '突变' };
+  const extraClass = key === 'stress' ? ' outlook-scenario-stress' : '';
+  return `<tr class="outlook-scenario-row outlook-scenario-${key}${extraClass}">
+    <td>${escapeHtml(labels[key] || key)}</td>
+    <td>${formatOutlookRangePct(sc)}</td>
+    <td class="outlook-scenario-score">${escapeHtml(sc.score != null ? `${sc.score >= 0 ? '+' : ''}${Number(sc.score).toFixed(2)}` : '—')}</td>
+    <td>${escapeHtml(sc.bias === 'bullish' ? '偏多' : sc.bias === 'bearish' ? '偏空' : '震荡')}</td>
+  </tr>`;
+}
+
+function renderOutlookScenariosTable(inst) {
+  const sc = inst.scenarios;
+  if (!sc?.base) return '';
+  const rows = ['base', 'bull', 'bear', 'stress']
+    .map((k) => formatOutlookScenarioRow(k, sc[k]))
+    .filter(Boolean)
+    .join('');
+  return `<div class="outlook-scenarios-block">
+    <h5>多情景次日区间</h5>
+    <table class="outlook-scenarios-table">
+      <thead><tr><th>情景</th><th>区间</th><th>分</th><th>偏向</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>
+    ${sc.stressTriggered ? '<p class="outlook-scenario-note">突变情景已触发（高星资讯或波动&gt;1.5×EMA）</p>' : ''}
+  </div>`;
+}
+
+function renderOutlookChangeDelta(inst) {
+  const d = inst.changeDelta;
+  if (!d) return '<p class="outlook-change-delta outlook-change-delta-empty">暂无较上次变更记录</p>';
+  const scorePart =
+    d.deltaScore != null
+      ? `综合分 ${d.deltaScore >= 0 ? '+' : ''}${Number(d.deltaScore).toFixed(2)}`
+      : '';
+  const midPart = d.deltaMid != null ? `区间中心 ${d.deltaMid >= 0 ? '+' : ''}${Number(d.deltaMid).toFixed(2)}%` : '';
+  const tags = (d.reasonTags || []).map((t) => escapeHtml(t)).join(' · ');
+  return `<p class="outlook-change-delta"><strong>较上次</strong> ${[scorePart, midPart].filter(Boolean).join(' · ')}${tags ? ` · ${tags}` : ''}</p>`;
+}
+
+function renderOutlookRegimeBadge(inst) {
+  if (!inst.regime || inst.regime === 'neutral') return '';
+  const changed = inst.changeDelta?.regimeChanged;
+  return `<span class="outlook-regime-badge${changed ? ' outlook-regime-changed' : ''}" title="${escapeAttr((inst.regimeTriggers || []).join(' · '))}">${escapeHtml(inst.regimeLabel || inst.regime)}${changed ? ' Δ' : ''}</span>`;
+}
+
 function formatOutlookRangeSubtext(range) {
   if (!range) return '';
   const mid = Number(range.mid);
   const sign = (n, digits = 2) => (n > 0 ? '+' : '') + n.toFixed(digits);
   const parts = [];
+  if (range.volForecastSubline) parts.push(range.volForecastSubline);
+  else if (range.volForecastDisplay) parts.push(range.volForecastDisplay);
   if (!Number.isNaN(mid)) parts.push(`中心 ${sign(mid)}%`);
   if (range.expectedMoveDisplay) parts.push(range.expectedMoveDisplay);
-  if (range.histVol20dDisplay) parts.push(range.histVol20dDisplay);
   return parts.join(' · ');
 }
 
@@ -2865,8 +2918,20 @@ function renderOutlookInstrumentDetail(inst) {
   const oi = f.oi || {};
   const cap = inst.capitalAttention || f.capitalAttention;
   const profile = f.profile || {};
+  const sv = inst.smoothedVol || tech.smoothedVol || {};
+  const volDetail = sv.volForecastPct != null
+    ? `<li>平滑波动：σ20 ${sv.sigma20 ?? '—'}% · EMA10 ${sv.volEma10 ?? '—'}% · EMA20 ${sv.volEma20 ?? '—'}% · 预测 ${sv.volForecastPct}%${sv.prevForecastPct != null ? ` · 昨日 ${sv.prevForecastPct}%` : ''}</li>`
+    : '';
 
+  const historyCount = inst.historyChangeCount != null ? inst.historyChangeCount : '';
   return `<div class="outlook-instrument-detail" hidden>
+    <div class="outlook-detail-toolbar">
+      <span class="outlook-judgement-stamp">研判更新 ${escapeHtml(inst.judgementUpdatedDisplay || '')}</span>
+      ${renderOutlookRegimeBadge(inst)}
+      <button type="button" class="btn-link outlook-history-btn" data-action="open-outlook-history" data-instrument="${escapeAttr(inst.id)}">研判存档${historyCount ? ` (${historyCount})` : ''}</button>
+    </div>
+    ${renderOutlookChangeDelta(inst)}
+    ${renderOutlookScenariosTable(inst)}
     <p class="outlook-rationale">${escapeHtml(inst.rationale || '')}</p>
     ${inst.profileSummary ? `<p class="outlook-profile-summary">${escapeHtml(inst.profileSummary)}</p>` : ''}
     <div class="outlook-detail-grid">
@@ -2891,7 +2956,8 @@ function renderOutlookInstrumentDetail(inst) {
           <li>BOLL：上 ${boll.upper ?? '—'} · 中 ${boll.mid ?? '—'} · 下 ${boll.lower ?? '—'} · 带宽 ${boll.bandwidth ?? '—'}%</li>
           <li>量比：${vol.ratio ?? '—'}（${escapeHtml(vol.label || '—')}）</li>
           <li>持仓：${oi.display || (oi.deltaPct != null ? `${oi.deltaPct > 0 ? '+' : ''}${oi.deltaPct}%` : '—')}（${escapeHtml(oi.label || '—')}）</li>
-          <li>品种特性：${escapeHtml(profile.volatilityTier || '—')} · ${escapeHtml(profile.supplyDemandType || '—')}</li>
+          ${volDetail}
+          <li>品种特性：${escapeHtml(profile.volatilityTier || '—')} · ${escapeHtml(profile.supplyDemandType || '—')}${sv.regimeLabel ? ` · ${escapeHtml(sv.regimeLabel)}` : ''}</li>
         </ul>
       </div>
       <div class="outlook-detail-block">
@@ -2905,7 +2971,7 @@ function renderOutlookInstrumentDetail(inst) {
 }
 
 function renderOutlookInstrumentRow(inst) {
-  const range = inst.nextDayRangePct || {};
+  const range = getOutlookBaseRange(inst);
   const badges = (inst.techBadges || []).map(renderOutlookTechBadge).join('');
   let priceHtml;
   if (inst.price != null && !Number.isNaN(Number(inst.price))) {
@@ -2930,18 +2996,22 @@ function renderOutlookInstrumentRow(inst) {
       </div>
       <div class="outlook-inst-col outlook-inst-price">${priceHtml} ${chg}</div>
       <div class="outlook-inst-col outlook-inst-range">
-        <span class="outlook-range-label">次日区间</span>
-        <span class="outlook-range-value ${outlookDirectionClass(range.bias)}" title="${escapeAttr(formatOutlookRangeCappedNote(range))}">${formatOutlookRangePct(range)}</span>
-        <span class="outlook-range-bias">${escapeHtml(formatOutlookRangeSubtext(range))}</span>
-        ${range.rangeCapped ? `<span class="outlook-range-capped" title="${escapeAttr(formatOutlookRangeCappedNote(range))}">已校准</span>` : ''}
+        <span class="outlook-range-label">次日基准${inst.scenarios?.stress ? ' · 含突变' : ''}</span>
+        <span class="outlook-range-value ${outlookDirectionClass(range.bias)}" title="${escapeAttr(formatOutlookRangeCappedNote(inst.nextDayRangePct))}">${formatOutlookRangePct(range)}</span>
+        <span class="outlook-range-bias">${escapeHtml(formatOutlookRangeSubtext(inst.nextDayRangePct || range))}</span>
+        ${inst.judgementUpdatedDisplay ? `<span class="outlook-row-stamp">研判 ${escapeHtml(inst.judgementUpdatedDisplay)}</span>` : ''}
+        ${inst.nextDayRangePct?.rangeCapped ? `<span class="outlook-range-capped" title="${escapeAttr(formatOutlookRangeCappedNote(inst.nextDayRangePct))}">已校准</span>` : ''}
       </div>
       <div class="outlook-inst-col outlook-inst-cap">
         ${renderOutlookCapitalBadge(inst)}
       </div>
       <div class="outlook-inst-col outlook-inst-dir">
+        ${renderOutlookRegimeBadge(inst)}
         <span class="outlook-dir-arrow">${escapeHtml(inst.directionArrow || '→')}</span>
         <span class="outlook-dir-label">${escapeHtml(inst.directionLabel || '震荡')}</span>
+        <span class="outlook-stars" title="置信度（含波动稳定性）">${escapeHtml(inst.starsHtml || '')}</span>
         <span class="outlook-composite-score" title="综合分">${escapeHtml(inst.compositeScoreDisplay || (inst.compositeScore != null ? `${inst.compositeScore >= 0 ? '+' : ''}${Number(inst.compositeScore).toFixed(2)}` : ''))}</span>
+        ${inst.changeDelta?.deltaScore != null ? `<span class="outlook-delta-score" title="较上次综合分">${inst.changeDelta.deltaScore >= 0 ? '+' : ''}${Number(inst.changeDelta.deltaScore).toFixed(2)}</span>` : ''}
       </div>
       <div class="outlook-inst-col outlook-inst-badges">${badges || '<span class="outlook-tech-badge outlook-badge-flat">待数据</span>'}</div>
       <span class="outlook-expand-icon" aria-hidden="true">▸</span>
@@ -3193,6 +3263,10 @@ function renderOutlookPanel(source) {
   const liveTag = source.liveRefreshedAt
     ? `<span class="policy-live-tag policy-live-badge outlook-live-tag"><span class="policy-live-dot"></span>实时 ${formatDate(source.liveRefreshedAt)}</span>`
     : '';
+  const regimeTag =
+    source.globalRegime && source.globalRegime !== 'neutral'
+      ? `<span class="outlook-global-regime">${escapeHtml(source.globalRegimeLabel || source.globalRegime)}</span>`
+      : '';
 
   if (!hasData) {
     return renderOutlookPlaceholder(source);
@@ -3218,10 +3292,11 @@ function renderOutlookPanel(source) {
           <h2 class="policy-reading-title">${escapeHtml(source.dataLabel || '大宗走势研判')}</h2>
           ${renderOutlookStatsInline(source.stats)}
         </div>
-        ${liveTag}
+        ${liveTag}${regimeTag}
       </header>
       <div class="outlook-framework-bar geo-framework-bar">
-        <p class="outlook-framework-intro geo-framework-intro">${escapeHtml(source.framework?.logicModel || '多因子+技术面')}</p>
+        <p class="outlook-framework-intro geo-framework-intro">${escapeHtml(source.framework?.logicModel || '动态多情景+双轨波动')}</p>
+        ${source.historyArchivePath ? `<p class="outlook-archive-hint">研判存档：${escapeHtml(source.historyArchivePath)}</p>` : ''}
       </div>
       <section class="outlook-section outlook-section-primary">
         <div class="outlook-section-head">
@@ -3243,7 +3318,7 @@ function renderOutlookPanel(source) {
         <h3 class="outlook-section-title">四大类 outlook 参考</h3>
         <div class="outlook-category-grid">${categoryCards}</div>
       </section>
-      <p class="policy-note outlook-note">v1.18.0 品种档案因子分解 · 资金关注 · 六板块 ${instruments.length} 品种 · 仅供参考</p>
+      <p class="policy-note outlook-note">v1.19.0 动态多情景 · 双轨波动 · regime 权重 · 研判存档 · ${instruments.length} 品种 · 仅供参考</p>
     </div>
   </div>`;
 }
@@ -3280,7 +3355,12 @@ function refreshOutlookPanelSections(panel, source) {
   if (instList && data.instruments?.length) {
     const hash = hashListInputs([
       'outlook-inst',
-      data.instruments.map((i) => `${i.id}:${i.direction}:${i.price}:${i.nextDayRangePct?.low}:${i.nextDayRangePct?.high}`).join(','),
+      data.instruments
+        .map(
+          (i) =>
+            `${i.id}:${i.direction}:${i.price}:${i.regime}:${i.judgementUpdatedAt}:${i.scenarios?.base?.low}:${i.scenarios?.base?.high}:${i.compositeScore}`
+        )
+        .join(','),
     ]);
     if (instList.dataset.listHash !== hash) {
       instList.dataset.listHash = hash;
@@ -3321,7 +3401,54 @@ function refreshOutlookPanelSections(panel, source) {
   updateNavTabBadge('outlook', data.instruments?.length || data.categories?.length || null);
 }
 
-const refreshOutlookPanelSectionsDebounced = debounce(refreshOutlookPanelSections, FILTER_DEBOUNCE_MS);
+const refreshOutlookPanelSectionsDebounced = debounce(refreshOutlookPanelSections, OUTLOOK_DEBOUNCE_MS);
+
+const refreshOutlookOnDataRefreshedDebounced = debounce((data) => {
+  if (!data?.sources?.outlook?.instruments?.length && !data?.sources?.outlook?.categories?.length) {
+    if (window.fancheng?.fetchOutlookLive) void refreshOutlookLive({ force: false });
+    return;
+  }
+  applyOutlookLiveData(data.sources.outlook);
+}, OUTLOOK_DEBOUNCE_MS);
+
+async function openOutlookHistoryModal(instrumentId) {
+  if (!instrumentId || !window.fancheng?.getOutlookHistory) return;
+  const panel = document.getElementById('panel-outlook');
+  let modal = panel?.querySelector('.outlook-history-modal');
+  if (!modal) {
+    modal = document.createElement('div');
+    modal.className = 'outlook-history-modal';
+    modal.innerHTML = '<div class="outlook-history-dialog"><header><h4></h4><button type="button" class="outlook-history-close" data-action="close-outlook-history">×</button></header><div class="outlook-history-body"></div></div>';
+    panel?.querySelector('.outlook-panel')?.appendChild(modal);
+  }
+  const title = modal.querySelector('h4');
+  const body = modal.querySelector('.outlook-history-body');
+  if (title) title.textContent = `${instrumentId} · 最近变更`;
+  if (body) body.innerHTML = '<div class="spinner inline-spinner"></div> 加载存档…';
+  modal.hidden = false;
+
+  const data = await window.fancheng.getOutlookHistory(instrumentId, 14);
+  if (data?.error) {
+    if (body) body.textContent = localizeUiMessage(data.error);
+    return;
+  }
+  const rows = (data.changes || []).slice(0, 20);
+  if (!rows.length) {
+    if (body) body.innerHTML = '<p class="empty-state">暂无研判变更记录</p>';
+    return;
+  }
+  if (body) {
+    body.innerHTML = `<ul class="outlook-history-list">${rows
+      .map((r) => {
+        const ts = r.ts ? formatDate(r.ts) : '—';
+        const tags = (r.reasonTags || []).map((t) => escapeHtml(t)).join(' · ');
+        const range = r.baseRange ? formatOutlookRangePct(r.baseRange) : '—';
+        const dScore = r.deltaScore != null ? ` Δ分${r.deltaScore >= 0 ? '+' : ''}${r.deltaScore}` : '';
+        return `<li><span class="outlook-history-ts">${escapeHtml(ts)}</span> <span class="outlook-history-dir">${escapeHtml(r.directionLabel || '')}</span> <span class="outlook-history-range">${range}</span>${dScore ? `<span class="outlook-history-delta">${escapeHtml(dScore.trim())}</span>` : ''}${tags ? `<span class="outlook-history-tags">${tags}</span>` : ''}</li>`;
+      })
+      .join('')}</ul>${data.root ? `<p class="outlook-archive-path">${escapeHtml(data.root)}</p>` : ''}`;
+  }
+}
 
 function setupOutlookPanel() {
   const panel = document.getElementById('panel-outlook');
@@ -3348,6 +3475,18 @@ function setupOutlookPanel() {
         window.__outlookEmptyReady = false;
         replaceSinglePanel('outlook', {});
         void refreshOutlookLive({ force: true });
+        return;
+      }
+      const historyBtn = e.target.closest('[data-action="open-outlook-history"]');
+      if (historyBtn) {
+        e.preventDefault();
+        void openOutlookHistoryModal(historyBtn.dataset.instrument);
+        return;
+      }
+      const closeHistory = e.target.closest('[data-action="close-outlook-history"]');
+      if (closeHistory) {
+        e.preventDefault();
+        panel.querySelector('.outlook-history-modal')?.setAttribute('hidden', '');
         return;
       }
       const toggleBtn = e.target.closest('[data-action="toggle-outlook-instrument"]');
@@ -5439,9 +5578,7 @@ async function bootstrapApp() {
           window.__climateCacheItems = data.sources.climate.items;
           applyClimateLiveData(data.sources.climate);
         }
-        if (data.sources?.outlook?.categories?.length) {
-          applyOutlookLiveData(data.sources.outlook);
-        }
+        refreshOutlookOnDataRefreshedDebounced(data);
         if (activeTab === 'fed' && hasCentralBankLivePayload(data.sources?.fed)) {
           applyFedLiveData(data.sources.fed);
         }

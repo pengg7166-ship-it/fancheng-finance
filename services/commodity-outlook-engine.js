@@ -1,24 +1,56 @@
 /**
- * 大宗商品走势研判 v3 — 逐品种档案 + 资金关注 + 资讯冲击 + 因子分解
- * 聚合：品种特性权重、宏观七因子、新闻池、成交量/持仓、BOLL、MA 排列
+ * 大宗商品走势研判 v4 — 动态多情景 + 双轨波动 + 环境 regime + 变更存档
  */
 const diskCache = require('./disk-cache');
+const volModel = require('./commodity-volatility-model');
+const outlookHistory = require('./commodity-outlook-history');
 const { normalizeCommodityId } = require('./policy-commodity-map');
 const { getCommodityMeta, getAllCommodities } = require('./commodities-catalog');
 const { getNewsKeywords, scoreNewsItem, getGlobalNewsPoolSync } = require('./commodities-news');
 const {
   getInstrumentProfile,
-  scoreToDirectionTier,
+  getSectorVolPrior,
+  volMultiplier,
   directionTierClass,
 } = require('./commodity-instrument-profiles');
 const {
   analyzeInstrumentTechnicals,
   hasCachedDayKlines,
   readCachedKlines,
+  readPrevVolForecast,
 } = require('./commodity-technical-analyzer');
 
-const OUTLOOK_DISK_KEY = 'commodity-outlook-v3.json';
+const OUTLOOK_DISK_KEY = 'commodity-outlook-v4.json';
 const OUTLOOK_DISK_TTL_MS = 60 * 1000;
+const OUTLOOK_RECOMPUTE_DEBOUNCE_MS = 800;
+const PRICE_OI_CHANGE_THRESHOLD_PCT = 0.12;
+
+/** 市场研判环境（条件权重，非固定） */
+const REGIME_IDS = ['riskOn', 'riskOff', 'liquidityPanic', 'supplyShock', 'weatherShock', 'neutral'];
+
+const REGIME_LABELS = {
+  riskOn: '风险偏好',
+  riskOff: '避险回落',
+  liquidityPanic: '流动性恐慌',
+  supplyShock: '供应冲击',
+  weatherShock: '气候冲击',
+  neutral: '中性',
+};
+
+/** regime → 因子权重乘数（× profile.factorWeights） */
+const REGIME_FACTOR_MULTIPLIERS = {
+  riskOn: { macroEquities: 1.15, macroUsd: 0.95, macroGeo: 0.9, news: 1.05, capital: 1.1, weather: 0.85 },
+  riskOff: { macroEquities: 1.2, macroUsd: 1.1, macroFed: 1.05, macroGeo: 1.15, news: 1.1, technical: 0.95 },
+  liquidityPanic: { macroFed: 1.25, macroEquities: 1.3, macroUsd: 1.1, intraday: 1.2, capital: 1.15, news: 1.05 },
+  supplyShock: { macroGeo: 1.35, macroPolicy: 1.2, news: 1.25, inventory: 1.2, macroClimate: 0.9 },
+  weatherShock: { weather: 1.45, macroClimate: 1.35, news: 1.1, macroChina: 1.05, macroEquities: 0.9 },
+  neutral: {},
+};
+
+let liveRefreshPromise = null;
+let outlookRecomputeTimer = null;
+let lastOutlookFingerprint = null;
+let lastOutlookDataVersion = 0;
 
 /** UI 板块分组 */
 const OUTLOOK_SECTORS = [
@@ -189,8 +221,6 @@ const BUCKET_FACTOR_MODS = {
   agriculture: { usEquities: 0.7, usd: 0.9, supply: 1.3, climate: 1.5, geopolitics: 0.8, fed: 0.9, boj: 0.85 },
 };
 
-let liveRefreshPromise = null;
-
 function clamp(n, min, max) {
   return Math.max(min, Math.min(max, n));
 }
@@ -248,6 +278,9 @@ const FACTOR_BREAKDOWN_LABELS = {
   inventory: '库存/OI',
   weather: '天气',
   profileAdjust: '品种校准',
+  volLevel: '波动水平',
+  volTrend: '波动趋势',
+  volForecastPct: 'σ预测',
 };
 
 function findUsIndices(indicesSource) {
@@ -807,6 +840,72 @@ function scoreNewsImpactForInstrument(meta, profile, sources, newsPools = []) {
   };
 }
 
+function computeVolBias(smoothedVol, technical, directionHint = 'neutral') {
+  if (!smoothedVol?.volForecastPct) {
+    return { volLevel: 0, volTrend: 0, volBias: 0, volForecastPct: null };
+  }
+
+  let volLevel = 0;
+  if (smoothedVol.regime === 'low') volLevel = 0.06;
+  else if (smoothedVol.regime === 'high') volLevel = -0.04;
+
+  const intradayChg = technical.intraday?.changePct ?? 0;
+  const intradayBearish = intradayChg < -0.08;
+  const intradayBullish = intradayChg > 0.08;
+  const trendAligned =
+    (directionHint === 'bullish' && intradayBullish) ||
+    (directionHint === 'bearish' && intradayBearish);
+
+  let volTrend = 0;
+  if (smoothedVol.volRising && intradayBearish) volTrend = -0.03;
+  else if (smoothedVol.volFalling && trendAligned) volTrend = 0.03;
+  else if (smoothedVol.volRising) volTrend = -0.02;
+  else if (smoothedVol.volFalling) volTrend = 0.02;
+
+  const volBias = volLevel + volTrend;
+  return {
+    volLevel: +volLevel.toFixed(2),
+    volTrend: +volTrend.toFixed(2),
+    volBias: +volBias.toFixed(4),
+    volForecastPct: smoothedVol.volForecastPct,
+  };
+}
+
+function adjustConfidenceForVolStability(baseStars, smoothedVol) {
+  let stars = baseStars;
+  if (!smoothedVol?.volEma10 || !smoothedVol?.volEma20) return clampStars(stars);
+
+  const avg = (smoothedVol.volEma10 + smoothedVol.volEma20) / 2;
+  const relDiff = avg > 0 ? Math.abs(smoothedVol.volEma10 - smoothedVol.volEma20) / avg : 1;
+
+  if (relDiff < 0.1) stars += 1;
+  else if (smoothedVol.regime === 'low') stars += 0.5;
+  else if (smoothedVol.regime === 'high') stars -= 0.5;
+
+  return clampStars(stars);
+}
+
+function effectiveDirectionThresholds(profile, smoothedVol) {
+  const th = profile.directionThresholds || {};
+  if (smoothedVol?.regime !== 'high') return th;
+  const widen = 1.12;
+  return {
+    strongBull: (th.strongBull ?? 0.15) * widen,
+    bull: (th.bull ?? 0.07) * widen,
+    bear: (th.bear ?? -0.07) * widen,
+    strongBear: (th.strongBear ?? -0.15) * widen,
+  };
+}
+
+function scoreToDirectionTierWithVol(score, profile, smoothedVol) {
+  const th = effectiveDirectionThresholds(profile, smoothedVol);
+  if (score >= th.strongBull) return { direction: 'strong_bullish', label: '强多', arrow: '↑↑' };
+  if (score >= th.bull) return { direction: 'bullish', label: '偏多', arrow: '↑' };
+  if (score <= th.strongBear) return { direction: 'strong_bearish', label: '强空', arrow: '↓↓' };
+  if (score <= th.bear) return { direction: 'bearish', label: '偏空', arrow: '↓' };
+  return { direction: 'neutral', label: '震荡', arrow: '→' };
+}
+
 function buildFactorBreakdown({
   profile,
   macroScores,
@@ -815,8 +914,10 @@ function buildFactorBreakdown({
   newsImpact,
   inventoryScore,
   weatherScore,
+  volBiasParts,
+  regime = 'neutral',
 }) {
-  const w = profile.factorWeights;
+  const { adjusted: w, regimeMultipliers } = applyRegimeToFactorWeights(profile, regime);
   const s = profile.macroSensitivity;
 
   const parts = {
@@ -833,6 +934,8 @@ function buildFactorBreakdown({
     intraday: (technical.intraday?.score || 0) * w.intraday,
     inventory: inventoryScore * w.inventory,
     weather: weatherScore * w.weather,
+    volLevel: volBiasParts?.volLevel ?? 0,
+    volTrend: volBiasParts?.volTrend ?? 0,
   };
 
   let profileAdjust = 0;
@@ -848,6 +951,8 @@ function buildFactorBreakdown({
     composite += v;
   }
   breakdown._sum = +composite.toFixed(4);
+  breakdown._regime = regime;
+  breakdown._regimeMultipliers = regimeMultipliers;
   return breakdown;
 }
 
@@ -915,7 +1020,159 @@ function getClassMaxPct(sector, instrumentId) {
 }
 
 function countHighStarNewsHits(newsFactor) {
-  return (newsFactor?.hits || []).filter((h) => (h.stars || 0) >= 4).length;
+  return volModel.countHighStarHits(newsFactor, 4);
+}
+
+function evaluateContext(sources, { sector, bucketId, technical, newsFactor } = {}) {
+  const usEq = scoreUsEquities(sources.indices, sources.fed);
+  const usd = scoreUsd(sources.forex);
+  const vix = parseVix(sources.fed);
+  const dxyChg = Math.abs(Number(usd.metrics?.changePct) || 0);
+  const geoAgg = aggregateIntelItems(sources.geopolitics?.items, bucketId || 'energy', 25);
+  const climateAgg = aggregateIntelItems(sources.climate?.items, bucketId || 'agriculture', 25);
+  const highStars = countHighStarNewsHits(newsFactor);
+  const oiSpike = Math.abs(technical?.oi?.deltaPct ?? 0) >= 3;
+  const volSpike = (technical?.volume?.ratio ?? 1) >= 1.65;
+
+  let regime = 'neutral';
+  const triggers = [];
+
+  if (vix > 26 && usEq.metrics?.panic) {
+    regime = 'liquidityPanic';
+    triggers.push('VIX恐慌');
+  } else if (vix > 24 && usEq.score < -0.15) {
+    regime = 'riskOff';
+    triggers.push('VIX偏高');
+  } else if (geoAgg.weight > 1.2 && geoAgg.score > 0.15 && (sector === 'energy' || sector === 'precious')) {
+    regime = 'supplyShock';
+    triggers.push('地缘供应');
+  } else if (
+    (sector === 'agriculture' || bucketId === 'agriculture') &&
+    climateAgg.weight > 0.8 &&
+    Math.abs(climateAgg.score) > 0.12
+  ) {
+    regime = 'weatherShock';
+    triggers.push('气候农产品');
+  } else if (usEq.score > 0.2 && vix < 20 && dxyChg < 0.2) {
+    regime = 'riskOn';
+    triggers.push('美股+VIX');
+  } else if (dxyChg > 0.35 && usd.score < -0.1) {
+    regime = 'riskOff';
+    triggers.push('美元走强');
+  }
+
+  if (highStars >= 2 && regime === 'neutral') {
+    regime = geoAgg.score > 0 ? 'supplyShock' : 'riskOff';
+    triggers.push('高星资讯');
+  }
+  if (oiSpike && volSpike && regime === 'neutral') {
+    regime = 'riskOn';
+    triggers.push('持仓放量');
+  }
+
+  return {
+    regime,
+    regimeLabel: REGIME_LABELS[regime] || regime,
+    triggers,
+    activeRules: REGIME_FACTOR_MULTIPLIERS[regime] || {},
+    vix,
+    dxyChangePct: usd.metrics?.changePct,
+  };
+}
+
+function applyRegimeToFactorWeights(profile, regime) {
+  const mults = REGIME_FACTOR_MULTIPLIERS[regime] || {};
+  const base = { ...profile.factorWeights };
+  const adjusted = {};
+  for (const [k, v] of Object.entries(base)) {
+    adjusted[k] = v * (mults[k] ?? 1);
+  }
+  const sum = Object.values(adjusted).reduce((s, n) => s + n, 0) || 1;
+  for (const k of Object.keys(adjusted)) {
+    adjusted[k] = adjusted[k] / sum;
+  }
+  return { adjusted, regimeMultipliers: mults };
+}
+
+function buildScenarioBand(mid, halfWidth, bias, score) {
+  let down = halfWidth;
+  let up = halfWidth;
+  if (bias === 'bearish' || score < -0.08) {
+    down *= 1.08;
+    up *= 0.94;
+  } else if (bias === 'bullish' || score > 0.08) {
+    down *= 0.94;
+    up *= 1.08;
+  }
+  return {
+    low: +clamp(mid - down, -99, 99).toFixed(3),
+    mid: +mid.toFixed(3),
+    high: +clamp(mid + up, -99, 99).toFixed(3),
+    bias,
+    score: +score.toFixed(3),
+  };
+}
+
+function buildScenarios({
+  compositeScore,
+  mid,
+  halfWidth,
+  classMax,
+  newsFactor,
+  shockVol,
+  smoothedVol,
+  flowAligned,
+}) {
+  const bias = scoreToDirection(compositeScore);
+  const base = buildScenarioBand(mid, halfWidth, bias, compositeScore);
+
+  const bullScore = clamp(compositeScore + (flowAligned ? 0.12 : 0.06), -1, 1);
+  const bearScore = clamp(compositeScore - (flowAligned ? 0.12 : 0.06), -1, 1);
+  const bull = buildScenarioBand(mid + halfWidth * 0.15, halfWidth * 0.82, 'bullish', bullScore);
+  const bear = buildScenarioBand(mid - halfWidth * 0.15, halfWidth * 0.82, 'bearish', bearScore);
+
+  const highStars = countHighStarNewsHits(newsFactor);
+  const stressTriggered = volModel.isVolShockTriggered({ shockVol, smoothedVol, highStarCount: highStars });
+  let stress = null;
+  if (stressTriggered) {
+    const stressHalf = Math.min(halfWidth * 1.45, classMax * 1.05);
+    const stressMid = mid + (bias === 'bullish' ? stressHalf * 0.2 : bias === 'bearish' ? -stressHalf * 0.2 : 0);
+    stress = buildScenarioBand(stressMid, stressHalf, bias, compositeScore);
+    stress.label = '突变';
+  }
+
+  return { base, bull, bear, stress, stressTriggered };
+}
+
+function hashNewsPool(sources, newsPools) {
+  const titles = [
+    ...(sources.policy?.items || []).slice(0, 12).map((i) => i.title),
+    ...(sources.geopolitics?.items || []).slice(0, 12).map((i) => i.title),
+    ...(sources.climate?.items || []).slice(0, 8).map((i) => i.title),
+    ...(newsPools || []).slice(0, 20).map((i) => i.title),
+  ]
+    .filter(Boolean)
+    .join('|');
+  return titles.length ? `${titles.length}:${titles.slice(0, 400)}` : '';
+}
+
+function computeOutlookFingerprint(sources, commoditiesSource) {
+  const newsHash = hashNewsPool(sources, collectOutlookNewsPools());
+  const prices = [];
+  for (const ex of commoditiesSource?.exchanges || []) {
+    for (const item of ex.items || []) {
+      if (item.price != null) {
+        prices.push(`${item.id}:${item.price}:${item.changePct}:${item.openInterest}`);
+      }
+    }
+  }
+  prices.sort();
+  return `${newsHash}::${prices.slice(0, 80).join(';')}`;
+}
+
+function outlookFingerprintChanged(prev, next) {
+  if (!prev || !next) return true;
+  return prev !== next;
 }
 
 function parseVix(fedSource) {
@@ -927,6 +1184,8 @@ function parseVix(fedSource) {
 function computeNextDayRangePct({
   compositeScore,
   historicalVol,
+  smoothedVol,
+  volatilityTier,
   newsFactor,
   newsShock,
   newsShockCap,
@@ -936,24 +1195,43 @@ function computeNextDayRangePct({
   sector,
   instrumentId,
   vix,
+  volumeRatio,
+  shockVol: shockVolIn,
+  compositeVolPct: compositeVolIn,
 }) {
   const classMax = getClassMaxPct(sector, instrumentId);
   const idLower = String(instrumentId || '').toLowerCase();
   const sigma = historicalVol?.sigmaDaily20 ?? historicalVol?.histVol20d ?? 0.45;
-  const p90 = historicalVol?.absReturnP90 ?? sigma * 1.35;
-  const atrPct = historicalVol?.atrPct14 ?? sigma;
 
-  let halfWidth;
-  if (sector === 'precious') {
-    halfWidth = Math.min(sigma * 1.2, p90 * 0.85, classMax);
-  } else if (sector === 'energy' || sector === 'black' || sector === 'metals') {
-    halfWidth = Math.min(Math.max(sigma * 1.2, atrPct * 0.55), classMax);
-  } else {
-    halfWidth = Math.min(sigma * 1.2, p90 * 0.85, classMax);
-  }
+  const baselineVol = smoothedVol?.volForecastPct ?? sigma;
+  const highStarCount = countHighStarNewsHits(newsFactor);
+  const shockVol =
+    shockVolIn ??
+    volModel.computeShockVol({
+      intradayChangePct,
+      volumeRatio: volumeRatio ?? 1,
+      highStarCount,
+      smoothedVol,
+      newsShock,
+    });
+  const shockWeight = volModel.computeShockWeight({
+    newsHitCount: newsFactor?.hitCount ?? 0,
+    highStarCount,
+    volumeRatio: volumeRatio ?? 1,
+  });
+  const compositeVol =
+    compositeVolIn ?? volModel.computeCompositeVolPct({ baselineVol, shockVol, shockWeight });
+
+  const prevVolRef = smoothedVol?.prevForecastPct ?? readPrevVolForecast(instrumentId) ?? baselineVol;
+  const tierMult = volMultiplier(volatilityTier || 'medium');
+  let halfWidth = compositeVol * tierMult;
+
+  if (smoothedVol?.regime === 'low') halfWidth *= 0.92;
+  else if (smoothedVol?.regime === 'high') halfWidth *= 1.06;
+
+  halfWidth = Math.min(halfWidth, classMax);
   halfWidth = Math.max(halfWidth, 0.12);
 
-  const highStarCount = countHighStarNewsHits(newsFactor);
   const newsAddPerStar = idLower === 'au' || idLower === 'pt' || idLower === 'pd' ? 0.3 : 0.5;
   const extremeNewsShock = (vix || 20) > 24 && highStarCount >= 1;
   let newsShockAdd = highStarCount * newsAddPerStar;
@@ -1009,6 +1287,8 @@ function computeNextDayRangePct({
   let biasLabel = directionLabel(bias);
   if (Math.abs(compositeScore || 0) <= 0.12) biasLabel = '震荡';
 
+  const volSubline = `基线 ${baselineVol.toFixed(2)}% + 突变${shockVol.toFixed(2)}%×${shockWeight} → ${compositeVol.toFixed(2)}% · 昨日 ${Number(prevVolRef).toFixed(2)}%`;
+
   return {
     low: +low.toFixed(3),
     mid: +mid.toFixed(3),
@@ -1020,16 +1300,24 @@ function computeNextDayRangePct({
     expectedMoveDisplay: `预测波动 ±${expectedMovePct.toFixed(2)}%`,
     histVol20d: +histVol20d.toFixed(2),
     histVol20dDisplay: `历史20日均波动 ±${histVol20d.toFixed(2)}%`,
+    volForecastPct: +compositeVol.toFixed(4),
+    baselineVolPct: +baselineVol.toFixed(4),
+    shockVol: +shockVol.toFixed(4),
+    shockWeight: +Number(shockWeight).toFixed(3),
+    compositeVolPct: +compositeVol.toFixed(4),
+    volForecastDisplay: `σ${compositeVol.toFixed(2)}% (平滑+突变)`,
+    volForecastSubline: volSubline,
+    smoothedVolDisplay: smoothedVol?.display || null,
     rangeCapped,
     rangeCappedNote: rangeCapped ? '区间已按品种历史上限校准' : null,
     halfWidth: +halfWidth.toFixed(3),
     classMaxPct: classMax,
-    volatilityProxy: +sigma.toFixed(3),
-    formula: `±min(σ×1.2,p90×0.85,板块上限)+高星新闻；mid=宏观/技术/新闻/盘中`,
+    volatilityProxy: +compositeVol.toFixed(3),
+    formula: `±(基线EMA+突变层)×tierMult+资讯；mid=宏观/技术/新闻/盘中`,
   };
 }
 
-function computeInstrumentConfidence({ hasLivePrice, hasEnough, dataPoints, newsHitCount, oiDelta, volumeRatio, compositeScore }) {
+function computeInstrumentConfidence({ hasLivePrice, hasEnough, dataPoints, newsHitCount, oiDelta, volumeRatio, compositeScore, smoothedVol }) {
   let raw = 1;
   if (hasLivePrice) raw += 1.2;
   if (hasEnough) raw += 1.5;
@@ -1038,10 +1326,10 @@ function computeInstrumentConfidence({ hasLivePrice, hasEnough, dataPoints, news
   if (oiDelta != null) raw += 0.4;
   if (volumeRatio != null) raw += 0.25;
   raw += Math.abs(compositeScore || 0) * 1.2;
-  return clampStars(raw);
+  return adjustConfidenceForVolStability(raw, smoothedVol);
 }
 
-function buildInstrumentHorizons(macroScore, newsFactor, technical, bucketId, compositeScore) {
+function buildInstrumentHorizons(macroScore, newsFactor, technical, bucketId, compositeScore, smoothedVol) {
   const horizons = {};
   for (const h of ['short', 'medium', 'long']) {
     const w = INSTRUMENT_FACTOR_WEIGHTS[h];
@@ -1064,6 +1352,7 @@ function buildInstrumentHorizons(macroScore, newsFactor, technical, bucketId, co
       oiDelta: technical.oi?.deltaPct,
       volumeRatio: technical.volume?.ratio,
       compositeScore: score,
+      smoothedVol,
     });
     horizons[h] = {
       score: +score.toFixed(4),
@@ -1140,6 +1429,21 @@ function buildTechBadges(technical, outlookPending = false) {
       trend: technical.intraday.changePct > 0.05 ? 'up' : technical.intraday.changePct < -0.05 ? 'down' : 'flat',
     });
   }
+  const sv = technical.smoothedVol;
+  if (sv?.regimeLabel) {
+    badges.push({
+      id: 'vol-regime',
+      label: sv.regimeLabel,
+      trend: sv.regimeTrend || 'flat',
+    });
+  }
+  if (sv?.volForecastPct != null) {
+    badges.push({
+      id: 'vol-forecast',
+      label: `σ预测${sv.volForecastPct.toFixed(2)}%`,
+      trend: sv.volRising ? 'up' : sv.volFalling ? 'down' : 'flat',
+    });
+  }
   return badges;
 }
 
@@ -1150,6 +1454,19 @@ function macroScoreForBucket(bucketId, sources) {
 }
 
 let klineBackfillPromise = null;
+
+async function ensurePriorityKlinesForOutlook() {
+  const { fetchCommodityHistory } = require('./commodities-history-fetcher');
+  const missing = KLINE_BACKFILL_PRIORITY.filter((id) => !hasCachedDayKlines(id, 5));
+  for (let i = 0; i < missing.length; i += 1) {
+    try {
+      await fetchCommodityHistory(missing[i], 'day');
+    } catch {
+      // ignore per-instrument failures
+    }
+    if (i < missing.length - 1) await new Promise((r) => setTimeout(r, 120));
+  }
+}
 
 function triggerOutlookKlineBackfill(limit = 40) {
   if (klineBackfillPromise) return klineBackfillPromise;
@@ -1189,16 +1506,21 @@ function collectOutlookNewsPools() {
   }
 }
 
-function buildInstrumentOutlooks(sources) {
+function buildInstrumentOutlooks(sources, globalCtx = null) {
   const newsPools = collectOutlookNewsPools();
+  const sharedCtx =
+    globalCtx ||
+    evaluateContext(sources, { sector: 'energy', bucketId: 'energy', technical: {}, newsFactor: {} });
 
   const prepRows = INSTRUMENT_REGISTRY.map((spec) => {
     const meta = getCommodityMeta(spec.id);
     if (!meta) return null;
+    const profile = getInstrumentProfile(spec.id);
+    const sectorPrior = getSectorVolPrior(spec.sector || profile.sector);
     const quote = resolveInstrumentQuote(spec, sources.commodities, null);
-    const technical = analyzeInstrumentTechnicals(spec.id, quote.liveQuote);
+    const technical = analyzeInstrumentTechnicals(spec.id, quote.liveQuote, { sectorPrior });
     const mergedQuote = resolveInstrumentQuote(spec, sources.commodities, technical);
-    return { spec, meta, liveQuote: mergedQuote.liveQuote, technical, mergedQuote };
+    return { spec, meta, profile, liveQuote: mergedQuote.liveQuote, technical, mergedQuote };
   }).filter(Boolean);
 
   const sectorRanks = computeSectorVolumeRanks(
@@ -1206,13 +1528,32 @@ function buildInstrumentOutlooks(sources) {
   );
 
   return prepRows
-    .map(({ spec, meta, liveQuote, technical, mergedQuote }) => {
-      const profile = getInstrumentProfile(spec.id);
+    .map(({ spec, meta, profile, liveQuote, technical, mergedQuote }) => {
       const newsImpact = scoreNewsImpactForInstrument(meta, profile, sources, newsPools);
+      const newsFactor = { score: newsImpact.score, hits: newsImpact.hits, hitCount: newsImpact.hitCount };
+      const ctx = evaluateContext(sources, {
+        sector: spec.sector,
+        bucketId: spec.bucket,
+        technical,
+        newsFactor,
+      });
+      const regime = ctx.regime !== 'neutral' ? ctx.regime : sharedCtx.regime;
+      const regimeLabel = REGIME_LABELS[regime] || regime;
+
       const macroScores = buildMacroScoresForInstrument(sources, spec.bucket);
       const capitalAttention = computeCapitalAttention(technical, liveQuote, sectorRanks[spec.id]);
       const inventoryScore = computeInventoryScore(technical, profile);
       const weatherScore = computeWeatherScore(macroScores.climate, profile);
+
+      const prelimScore = clamp(
+        (technical.techScore || 0) * 0.35 +
+          (newsImpact.shock || newsImpact.score * 0.15) * 0.25 +
+          (macroScores.usd * 0.3 + macroScores.china * 0.4) * 0.2,
+        -1,
+        1
+      );
+      const directionHint = scoreToDirection(prelimScore);
+      const volBiasParts = computeVolBias(technical.smoothedVol, technical, directionHint);
 
       const factorBreakdown = buildFactorBreakdown({
         profile,
@@ -1222,12 +1563,20 @@ function buildInstrumentOutlooks(sources) {
         newsImpact,
         inventoryScore,
         weatherScore,
+        volBiasParts,
+        regime,
       });
+      const regimeMultipliers = factorBreakdown._regimeMultipliers || {};
+      delete factorBreakdown._regime;
+      delete factorBreakdown._regimeMultipliers;
 
-      const compositeScore = clamp(factorBreakdown._sum ?? 0, -1, 1);
+      let compositeScore = clamp((factorBreakdown._sum ?? 0) + (volBiasParts.volBias || 0), -1, 1);
       delete factorBreakdown._sum;
+      if (volBiasParts.volForecastPct != null) {
+        factorBreakdown.volForecastPct = +volBiasParts.volForecastPct.toFixed(2);
+      }
 
-      const dirTier = scoreToDirectionTier(compositeScore, profile.volatilityTier);
+      const dirTier = scoreToDirectionTierWithVol(compositeScore, profile, technical.smoothedVol);
       const direction = directionTierClass(dirTier.direction);
 
       const hasLivePrice = mergedQuote.price != null && !Number.isNaN(Number(mergedQuote.price));
@@ -1238,25 +1587,23 @@ function buildInstrumentOutlooks(sources) {
         { score: newsImpact.score, hitCount: newsImpact.hitCount },
         technical,
         spec.bucket,
-        compositeScore
+        compositeScore,
+        technical.smoothedVol
       );
 
       const vix = parseVix(sources.fed);
-      const newsFactor = { score: newsImpact.score, hits: newsImpact.hits, hitCount: newsImpact.hitCount };
       const nextDayRangePct = outlookPending
         ? null
         : computeNextDayRangePct({
             compositeScore,
-            historicalVol:
-              technical.historicalVol ||
-              (technical.volatilityProxy
-                ? {
-                    sigmaDaily20: technical.volatilityProxy,
-                    histVol20d: technical.volatilityProxy,
-                    atrPct14: technical.intraday?.atrProxyPct ?? technical.volatilityProxy * 1.2,
-                    absReturnP90: technical.volatilityProxy * 1.35,
-                  }
-                : null),
+            historicalVol: technical.historicalVol || {
+              sigmaDaily20: technical.smoothedVol?.sigma20 ?? technical.volatilityProxy,
+              histVol20d: technical.smoothedVol?.sigma20 ?? technical.volatilityProxy,
+              atrPct14: technical.smoothedVol?.atr14Pct ?? technical.intraday?.atrProxyPct,
+              absReturnP90: technical.smoothedVol?.p90AbsReturn ?? (technical.volatilityProxy || 0.45) * 1.35,
+            },
+            smoothedVol: technical.smoothedVol,
+            volatilityTier: profile.volatilityTier,
             newsFactor,
             newsShock: newsImpact.shock,
             newsShockCap: profile.newsShockCap,
@@ -1266,7 +1613,36 @@ function buildInstrumentOutlooks(sources) {
             sector: spec.sector,
             instrumentId: spec.id,
             vix,
+            volumeRatio: technical.volume?.ratio,
           });
+
+      let scenarios = null;
+      if (nextDayRangePct) {
+        const flowAligned =
+          (compositeScore > 0.08 && newsImpact.score > 0.1 && (technical.volume?.ratio ?? 1) >= 1.1) ||
+          (compositeScore < -0.08 && newsImpact.score < -0.1);
+        scenarios = buildScenarios({
+          compositeScore,
+          mid: nextDayRangePct.mid,
+          halfWidth: nextDayRangePct.halfWidth,
+          classMax: nextDayRangePct.classMaxPct,
+          newsFactor,
+          shockVol: nextDayRangePct.shockVol,
+          smoothedVol: technical.smoothedVol,
+          flowAligned,
+        });
+        nextDayRangePct.scenarioPrimary = 'base';
+      }
+
+      const judgementUpdatedAt = new Date().toISOString();
+      const volForecast = nextDayRangePct
+        ? {
+            baseline: nextDayRangePct.baselineVolPct,
+            shockVol: nextDayRangePct.shockVol,
+            shockWeight: nextDayRangePct.shockWeight,
+            composite: nextDayRangePct.compositeVolPct,
+          }
+        : null;
 
       const confidence = computeInstrumentConfidence({
         hasLivePrice,
@@ -1276,6 +1652,7 @@ function buildInstrumentOutlooks(sources) {
         oiDelta: technical.oi?.deltaPct,
         volumeRatio: technical.volume?.ratio,
         compositeScore,
+        smoothedVol: technical.smoothedVol,
       });
 
       const bucketFactorScores = buildBucketFactorScores(sources, spec.bucket);
@@ -1288,12 +1665,18 @@ function buildInstrumentOutlooks(sources) {
 
       const factorBreakdownDisplay = Object.entries(factorBreakdown)
         .filter(([, v]) => Math.abs(v) >= 0.005)
-        .map(([id, value]) => ({
-          id,
-          label: FACTOR_BREAKDOWN_LABELS[id] || id,
-          value: +value.toFixed(2),
-          display: `${value >= 0 ? '+' : ''}${value.toFixed(2)}`,
-        }))
+        .map(([id, value]) => {
+          const mult = regimeMultipliers[id];
+          const label = FACTOR_BREAKDOWN_LABELS[id] || id;
+          const multNote = mult != null && mult !== 1 ? ` ×${mult.toFixed(2)}` : '';
+          return {
+            id,
+            label: `${label}${multNote}`,
+            value: +value.toFixed(2),
+            display: `${value >= 0 ? '+' : ''}${value.toFixed(2)}`,
+            regimeMultiplier: mult,
+          };
+        })
         .sort((a, b) => Math.abs(b.value) - Math.abs(a.value));
 
       const factors = {
@@ -1315,6 +1698,7 @@ function buildInstrumentOutlooks(sources) {
           boll: technical.boll,
           dataPoints: technical.dataPoints,
           hasEnough: technical.hasEnough,
+          smoothedVol: technical.smoothedVol,
         },
         volume: technical.volume,
         oi: technical.oi,
@@ -1332,7 +1716,7 @@ function buildInstrumentOutlooks(sources) {
         ? `${meta.name}：现价待加载；${mergedQuote.priceReason || '行情未接入'}`
         : buildInstrumentRationale(meta, factorBreakdown, capitalAttention, newsImpact, profile);
 
-      return {
+      const row = {
         id: meta.id,
         name: meta.name,
         aliases: profile.newsAliases?.slice(0, 4) || meta.keywords?.slice(0, 4) || [],
@@ -1357,6 +1741,17 @@ function buildInstrumentOutlooks(sources) {
         capitalAttention,
         capitalAttentionDisplay: capitalAttention.display,
         nextDayRangePct,
+        scenarios,
+        regime,
+        regimeLabel,
+        regimeTriggers: ctx.triggers,
+        judgementUpdatedAt,
+        judgementUpdatedDisplay: formatJudgementTime(judgementUpdatedAt),
+        volForecast,
+        shockVol: nextDayRangePct?.shockVol ?? null,
+        compositeVolPct: nextDayRangePct?.compositeVolPct ?? null,
+        smoothedVol: technical.smoothedVol,
+        volForecastPct: nextDayRangePct?.compositeVolPct ?? technical.smoothedVol?.volForecastPct ?? null,
         short: horizons.short,
         medium: horizons.medium,
         long: horizons.long,
@@ -1366,13 +1761,27 @@ function buildInstrumentOutlooks(sources) {
         factorBreakdownDisplay,
         rationale,
         sourceNote: technical.sourceNote,
-        profileSummary: `${profile.volatilityTier}波动 · ${profile.supplyDemandType} · ${profile.tradingSession}`,
+        profileSummary: `${profile.volatilityTier}波动 · ${profile.supplyDemandType} · ${profile.tradingSession} · ${regimeLabel}`,
+        dataVersion: lastOutlookDataVersion,
       };
+      return outlookHistory.attachChangeDelta(row);
     })
     .sort((a, b) => a.priority - b.priority || a.name.localeCompare(b.name, 'zh-CN'));
 }
 
+function formatJudgementTime(iso) {
+  try {
+    const d = new Date(iso);
+    const pad = (n) => String(n).padStart(2, '0');
+    return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+  } catch {
+    return '';
+  }
+}
+
 function buildCommodityOutlookFromSources(sources = {}) {
+  lastOutlookDataVersion += 1;
+  const globalCtx = evaluateContext(sources, { sector: 'energy', bucketId: 'energy' });
   let globalFactors;
   let categories;
   let factors;
@@ -1381,7 +1790,7 @@ function buildCommodityOutlookFromSources(sources = {}) {
     globalFactors = buildFactorScores(sources);
     categories = buildCategoryOutlooks(sources);
     factors = buildFactorsPanel(globalFactors);
-    instruments = buildInstrumentOutlooks(sources);
+    instruments = buildInstrumentOutlooks(sources, globalCtx);
   } catch (err) {
     globalFactors = {};
     categories = buildCategoryOutlooks({});
@@ -1394,7 +1803,12 @@ function buildCommodityOutlookFromSources(sources = {}) {
       categories,
       instruments,
       factors,
-      framework: { logicModel: '多因子+品种档案（部分输入异常，已降级）', version: 'v1.18.0' },
+      framework: {
+        logicModel: '动态多情景+双轨波动+环境regime（部分输入异常，已降级）',
+        version: 'v1.19.0',
+        regimes: REGIME_IDS.map((id) => ({ id, label: REGIME_LABELS[id] })),
+      },
+      globalRegime: globalCtx.regime,
       sectors: OUTLOOK_SECTORS,
       stats: {
         categoryCount: categories.length,
@@ -1430,15 +1844,18 @@ function buildCommodityOutlookFromSources(sources = {}) {
     factors,
     framework: {
       logicModel:
-        '品种档案权重 → 宏观/资金/资讯/技术/库存因子分解 → 综合分 → 历史校准次日区间',
+        '环境regime×品种权重 → 宏观/资金/资讯/技术 → 综合分 → 基线+突变双轨σ → base/bull/bear/stress 四情景',
       horizons: HORIZON_LABELS,
       factorIds: FACTOR_DEFS.map((f) => f.id),
       instrumentIds: INSTRUMENT_REGISTRY.map((i) => i.id),
       sectors: OUTLOOK_SECTORS,
-      rangeFormula: '±min(σ×1.2,p90×0.85,板块上限)+资讯冲击；mid=因子分解合成',
+      regimes: REGIME_IDS.map((id) => ({ id, label: REGIME_LABELS[id] })),
+      rangeFormula: 'compositeVol=基线EMA+shockWeight×突变；情景区间按方向偏置',
       sectorClassCaps: SECTOR_CLASS_MAX_PCT,
-      version: 'v1.18.0',
+      version: 'v1.19.0',
     },
+    globalRegime: globalCtx.regime,
+    globalRegimeLabel: globalCtx.regimeLabel,
     sectors: OUTLOOK_SECTORS,
     stats: {
       categoryCount: categories.length,
@@ -1470,12 +1887,39 @@ function enrichSourcesForOutlook(sources = {}) {
   return next;
 }
 
-function fetchCommodityOutlookSource(sources) {
+async function fetchCommodityOutlookSource(sources) {
   const enriched = enrichSourcesForOutlook(sources);
+  try {
+    await ensurePriorityKlinesForOutlook();
+  } catch {
+    // continue with cached/partial klines
+  }
   triggerOutlookKlineBackfill().catch(() => {});
   const payload = buildCommodityOutlookFromSources(enriched);
+  lastOutlookFingerprint = computeOutlookFingerprint(enriched, enriched.commodities);
+  const hist = outlookHistory.recordOutlookSnapshots(payload.instruments, {
+    dataVersion: lastOutlookDataVersion,
+  });
+  payload.historyArchivePath = hist.root;
   diskCache.write(OUTLOOK_DISK_KEY, { data: payload, savedAt: Date.now() });
   return payload;
+}
+
+function scheduleOutlookRecomputeOnSourcesChange(sources) {
+  const enriched = enrichSourcesForOutlook(sources);
+  const fp = computeOutlookFingerprint(enriched, enriched.commodities);
+  if (!outlookFingerprintChanged(lastOutlookFingerprint, fp)) return null;
+
+  if (outlookRecomputeTimer) clearTimeout(outlookRecomputeTimer);
+  outlookRecomputeTimer = setTimeout(() => {
+    outlookRecomputeTimer = null;
+    refreshCommodityOutlookInBackground(enriched).catch(() => {});
+  }, OUTLOOK_RECOMPUTE_DEBOUNCE_MS);
+  return refreshCommodityOutlookInBackground;
+}
+
+function notifyOutlookSourcesRefreshed(sources) {
+  return scheduleOutlookRecomputeOnSourcesChange(sources);
 }
 
 function getCachedCommodityOutlookSource() {
@@ -1503,7 +1947,7 @@ function fetchCommodityOutlookLive({ force = false, sources } = {}) {
       if (Date.now() - (stale?.savedAt || 0) > OUTLOOK_DISK_TTL_MS) {
         refreshCommodityOutlookInBackground(allSources);
       }
-      return { ...cached, fromCache: true };
+      return Promise.resolve({ ...cached, fromCache: true });
     }
     if (hasCommodities) {
       return fetchCommodityOutlookSource(allSources);
@@ -1536,13 +1980,22 @@ module.exports = {
   FACTOR_DEFS,
   FACTOR_BREAKDOWN_LABELS,
   HORIZON_WEIGHTS,
+  REGIME_IDS,
+  REGIME_LABELS,
+  REGIME_FACTOR_MULTIPLIERS,
   buildInstrumentRegistryFromCatalog,
   buildCommodityOutlookFromSources,
   fetchCommodityOutlookSource,
   getCachedCommodityOutlookSource,
   fetchCommodityOutlookLive,
   refreshCommodityOutlookInBackground,
+  scheduleOutlookRecomputeOnSourcesChange,
+  notifyOutlookSourcesRefreshed,
   triggerOutlookKlineBackfill,
+  ensurePriorityKlinesForOutlook,
+  evaluateContext,
+  buildScenarios,
+  computeVolBias,
   computeNextDayRangePct,
   computeCapitalAttention,
   buildFactorBreakdown,
@@ -1551,4 +2004,5 @@ module.exports = {
   directionArrow,
   directionLabel,
   starsToHtml,
+  formatJudgementTime,
 };

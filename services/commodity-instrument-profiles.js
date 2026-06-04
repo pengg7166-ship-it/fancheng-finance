@@ -14,6 +14,27 @@ const DIRECTION_THRESHOLDS = {
 
 const NEWS_SHOCK_CAP = { low: 0.25, medium: 0.35, high: 0.45 };
 
+/** 板块先验日波动（%），日线不足时与盘中振幅混合 */
+const SECTOR_VOL_PRIOR_PCT = {
+  precious: 0.38,
+  metals: 0.62,
+  energy: 1.25,
+  black: 0.88,
+  chemical: 0.78,
+  agriculture: 0.72,
+};
+
+function getSectorVolPrior(sector) {
+  return SECTOR_VOL_PRIOR_PCT[sector] ?? SECTOR_VOL_PRIOR_PCT.agriculture;
+}
+
+/** 档案 tier → 次日区间半宽乘数（基于平滑预测，非 BOLL 带宽） */
+function volMultiplier(volatilityTier) {
+  if (volatilityTier === 'low') return 0.88;
+  if (volatilityTier === 'high') return 1.12;
+  return 1.0;
+}
+
 const SECTOR_TEMPLATES = {
   precious: {
     volatilityTier: 'low',
@@ -346,7 +367,10 @@ function directionTierClass(dir) {
 module.exports = {
   DIRECTION_THRESHOLDS,
   NEWS_SHOCK_CAP,
+  SECTOR_VOL_PRIOR_PCT,
   SECTOR_TEMPLATES,
+  getSectorVolPrior,
+  volMultiplier,
   getInstrumentProfile,
   getAllInstrumentProfiles,
   buildProfileForId,

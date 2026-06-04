@@ -119,6 +119,21 @@ app.whenReady().then(async () => {
   const auRange = auInst?.nextDayRangePct;
   const auRangeSpan = auRange ? Number(auRange.high) - Number(auRange.low) : null;
   const auRangeOk = auRangeSpan == null || auRangeSpan <= 1.5;
+  const auVolForecast = auInst?.volForecastPct ?? auInst?.smoothedVol?.volForecastPct;
+  const cuVolForecast = cuInst?.volForecastPct ?? cuInst?.smoothedVol?.volForecastPct;
+  const volForecastNumeric =
+    auVolForecast != null &&
+    !Number.isNaN(Number(auVolForecast)) &&
+    cuVolForecast != null &&
+    !Number.isNaN(Number(cuVolForecast));
+  const scenariosOk =
+    auInst?.scenarios?.base?.low != null &&
+    cuInst?.scenarios?.bull != null &&
+    cuInst?.scenarios?.bear != null;
+  const regimeOk = Boolean(engineProbe.globalRegime);
+  if (auVolForecast != null && Number.isNaN(Number(auVolForecast))) {
+    console.error(`[diagnose] au volForecastPct is not numeric: ${auVolForecast}`);
+  }
   const factorSig = (inst) => JSON.stringify(inst?.factorBreakdown || {});
   const factorBreakdownDistinct =
     auInst?.factorBreakdown &&
@@ -128,9 +143,20 @@ app.whenReady().then(async () => {
   if (auRangeSpan != null && !auRangeOk) {
     console.error(`[diagnose] au next-day range span ${auRangeSpan.toFixed(2)}% exceeds 1.5% cap`);
   }
-  if (firstThree.length >= 3 && hasCommodities && (!rangesDistinct || !scoresDistinct || !noPendingDirection || !auRangeOk || !factorBreakdownDistinct)) {
+  if (
+    firstThree.length >= 3 &&
+    hasCommodities &&
+    (!rangesDistinct ||
+      !scoresDistinct ||
+      !noPendingDirection ||
+      !auRangeOk ||
+      !factorBreakdownDistinct ||
+      !volForecastNumeric ||
+      !scenariosOk ||
+      !regimeOk)
+  ) {
     console.error(
-      `[diagnose] outlook diversity check FAILED rangesDistinct=${rangesDistinct} scoresDistinct=${scoresDistinct} noPendingDirection=${noPendingDirection} auRangeOk=${auRangeOk} factorBreakdownDistinct=${factorBreakdownDistinct} auSpan=${auRangeSpan}`
+      `[diagnose] outlook diversity check FAILED rangesDistinct=${rangesDistinct} scoresDistinct=${scoresDistinct} noPendingDirection=${noPendingDirection} auRangeOk=${auRangeOk} factorBreakdownDistinct=${factorBreakdownDistinct} volForecastNumeric=${volForecastNumeric} scenariosOk=${scenariosOk} regimeOk=${regimeOk} auSpan=${auRangeSpan}`
     );
   }
   console.log(
@@ -232,6 +258,12 @@ app.whenReady().then(async () => {
         outlookNoPendingDirection: noPendingDirection,
         auRangeSpan,
         auRangeOk,
+        auVolForecast,
+        cuVolForecast,
+        volForecastNumeric,
+        scenariosOk,
+        regimeOk,
+        globalRegime: engineProbe.globalRegime,
         factorBreakdownDistinct,
         auFactorBreakdown: auInst?.factorBreakdown,
         cuFactorBreakdown: cuInst?.factorBreakdown,
