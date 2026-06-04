@@ -1,8 +1,9 @@
-# 首次推送到 GitHub（需先在 https://github.com/new 创建空仓库 fancheng-finance）
+﻿# 首次推送到 GitHub：若尚未建仓，打开 https://github.com/new 创建空仓库 fancheng-finance
 # 用法：.\scripts\push-github.ps1 -GitHubUser 你的GitHub用户名
+# 示例账号：pengg7166-ship-it（勿使用他人用户名，否则 push 会 404）
 
 param(
-  [string]$GitHubUser = 'gaotianze',
+  [string]$GitHubUser = 'pengg7166-ship-it',
   [string]$RepoName = 'fancheng-finance'
 )
 
