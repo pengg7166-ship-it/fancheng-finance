@@ -55,6 +55,11 @@ contextBridge.exposeInMainWorld('fancheng', {
     ipcRenderer.on('climate-live', handler);
     return () => ipcRenderer.removeListener('climate-live', handler);
   },
+  onWindowFocusChanged: (callback) => {
+    const handler = (_event, payload) => callback(payload);
+    ipcRenderer.on('window-focus-changed', handler);
+    return () => ipcRenderer.removeListener('window-focus-changed', handler);
+  },
   onFedLive: (callback) => {
     const handler = (_event, payload) => callback(payload);
     ipcRenderer.on('fed-live', handler);

@@ -205,7 +205,7 @@ function dedupeAndSort(items) {
   });
 }
 
-const GEO_PAYLOAD_ITEM_LIMIT = 120;
+const GEO_PAYLOAD_ITEM_LIMIT = 200;
 
 async function buildGeopoliticsPayload(rawItems) {
   const normalized = rawItems.map(normalizeItem).filter(Boolean);

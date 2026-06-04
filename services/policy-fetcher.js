@@ -344,7 +344,7 @@ function buildStats(items) {
   };
 }
 
-const POLICY_PAYLOAD_ITEM_LIMIT = 150;
+const POLICY_PAYLOAD_ITEM_LIMIT = 200;
 
 async function fetchPolicyRadar() {
   const rawItems = await fetchAllPolicyRaw();

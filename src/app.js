@@ -28,7 +28,11 @@ const DOT_CLASS = {
 
 const CLIMATE_DISPLAY_LIMIT = 80;
 const GEO_DISPLAY_LIMIT = 80;
-const POLICY_DISPLAY_LIMIT = 100;
+const POLICY_DISPLAY_LIMIT = 80;
+const VIRTUAL_ROW_ESTIMATE = 112;
+const VIRTUAL_OVERSCAN = 4;
+const VIRTUAL_MAX_ROWS = 32;
+const FILTER_DEBOUNCE_MS = 450;
 
 let activeTab = 'indices';
 let selectedIndexId = 'sp500';
@@ -83,6 +87,10 @@ let pendingRenderData = null;
 let renderAllScheduled = false;
 let rafWorkQueue = [];
 let rafWorkScheduled = false;
+let rafLoopId = null;
+let rendererPaused = false;
+let panelInitObserver = null;
+const virtualListRegistry = new WeakMap();
 const CHUNK_DOM_SIZE = 20;
 
 const FRED_APPLY_URL = 'https://fredaccount.stlouisfed.org/apikeys';
@@ -131,10 +139,27 @@ function cancelPendingPanelRenders() {
   pendingRenderData = null;
   renderAllScheduled = false;
   rafWorkQueue.length = 0;
+  if (rafLoopId != null) {
+    cancelAnimationFrame(rafLoopId);
+    rafLoopId = null;
+  }
+  rafWorkScheduled = false;
+  for (const scrollEl of document.querySelectorAll('[data-virtual-mounted="1"]')) {
+    const state = virtualListRegistry.get(scrollEl);
+    if (state?.raf) {
+      cancelAnimationFrame(state.raf);
+      state.raf = null;
+    }
+  }
 }
 
 function processRafQueue() {
+  rafLoopId = null;
   rafWorkScheduled = false;
+  if (rendererPaused) {
+    rafWorkQueue.length = 0;
+    return;
+  }
   const batch = rafWorkQueue.splice(0, 2);
   for (const fn of batch) {
     try {
@@ -145,19 +170,201 @@ function processRafQueue() {
   }
   if (rafWorkQueue.length) {
     rafWorkScheduled = true;
-    requestAnimationFrame(processRafQueue);
+    rafLoopId = requestAnimationFrame(processRafQueue);
   }
 }
 
 function scheduleRafWork(fn) {
+  if (rendererPaused) return;
   if (fn) rafWorkQueue.push(fn);
   if (rafWorkScheduled) return;
   rafWorkScheduled = true;
-  requestAnimationFrame(processRafQueue);
+  rafLoopId = requestAnimationFrame(processRafQueue);
 }
 
 function scheduleIdleWork(fn) {
   scheduleRafWork(fn);
+}
+
+function destroyVirtualList(scrollEl) {
+  const state = virtualListRegistry.get(scrollEl);
+  if (!state) return;
+  state.destroy?.();
+  virtualListRegistry.delete(scrollEl);
+  scrollEl.dataset.virtualMounted = '';
+}
+
+function mountVirtualReadingList(scrollEl, items, renderRow, { listClass = 'policy-reading-list', moreHint = '' } = {}) {
+  if (!scrollEl) return;
+  destroyVirtualList(scrollEl);
+  if (!items?.length) {
+    scrollEl.innerHTML = '<div class="empty-state policy-feed-empty">当前筛选条件下暂无数据</div>';
+    return;
+  }
+
+  const rowHeight = VIRTUAL_ROW_ESTIMATE;
+  const totalHeight = items.length * rowHeight;
+  scrollEl.innerHTML = '';
+  const spacer = document.createElement('div');
+  spacer.className = 'virtual-list-spacer';
+  spacer.style.height = `${totalHeight}px`;
+  spacer.style.position = 'relative';
+
+  const windowEl = document.createElement('div');
+  windowEl.className = 'virtual-list-window';
+  windowEl.style.position = 'absolute';
+  windowEl.style.top = '0';
+  windowEl.style.left = '0';
+  windowEl.style.right = '0';
+
+  const listEl = document.createElement('div');
+  listEl.className = listClass;
+  windowEl.appendChild(listEl);
+  spacer.appendChild(windowEl);
+  scrollEl.appendChild(spacer);
+  if (moreHint) scrollEl.insertAdjacentHTML('beforeend', moreHint);
+
+  const state = {
+    items,
+    renderRow,
+    listEl,
+    windowEl,
+    scrollEl,
+    start: -1,
+    end: -1,
+    raf: null,
+  };
+
+  const update = () => {
+    if (!document.body.contains(scrollEl) || rendererPaused) return;
+    const scrollTop = scrollEl.scrollTop;
+    const viewH = scrollEl.clientHeight || 560;
+    const start = Math.max(0, Math.floor(scrollTop / rowHeight) - VIRTUAL_OVERSCAN);
+    const visibleCount = Math.ceil(viewH / rowHeight) + VIRTUAL_OVERSCAN * 2;
+    const end = Math.min(items.length, start + Math.max(VIRTUAL_MAX_ROWS, visibleCount));
+
+    if (start === state.start && end === state.end && listEl.childElementCount === end - start) return;
+    state.start = start;
+    state.end = end;
+    windowEl.style.transform = `translateY(${start * rowHeight}px)`;
+
+    const frag = document.createDocumentFragment();
+    const tmp = document.createElement('div');
+    for (let i = start; i < end; i++) {
+      tmp.innerHTML = renderRow(items[i], i + 1);
+      if (tmp.firstElementChild) frag.appendChild(tmp.firstElementChild);
+    }
+    listEl.replaceChildren(frag);
+  };
+
+  const onScroll = () => {
+    if (state.raf || rendererPaused) return;
+    state.raf = requestAnimationFrame(() => {
+      state.raf = null;
+      update();
+    });
+  };
+
+  scrollEl.addEventListener('scroll', onScroll, { passive: true });
+  state.destroy = () => {
+    scrollEl.removeEventListener('scroll', onScroll);
+    if (state.raf) cancelAnimationFrame(state.raf);
+  };
+
+  virtualListRegistry.set(scrollEl, state);
+  scrollEl.dataset.virtualMounted = '1';
+  update();
+}
+
+function pauseRendererWork() {
+  if (rendererPaused) return;
+  rendererPaused = true;
+  cancelPendingPanelRenders();
+}
+
+function resumeRendererWork() {
+  if (!rendererPaused) return;
+  rendererPaused = false;
+  const pending = pendingRenderData;
+  if (pending) {
+    pendingRenderData = null;
+    if (panelsInitialized) {
+      scheduleRafWork(() => applyIncrementalDataUpdate(pending));
+    } else {
+      scheduleRafWork(() => executeRenderAll(pending));
+    }
+  }
+}
+
+function bindWindowFocusHandlers() {
+  const onFocusChange = (focused) => {
+    if (focused) resumeRendererWork();
+    else pauseRendererWork();
+  };
+  if (window.fancheng?.onWindowFocusChanged) {
+    window.fancheng.onWindowFocusChanged(({ focused }) => onFocusChange(Boolean(focused)));
+  }
+  document.addEventListener('visibilitychange', () => onFocusChange(!document.hidden));
+  window.addEventListener('blur', () => onFocusChange(false));
+  window.addEventListener('focus', () => onFocusChange(true));
+}
+
+function initPanelSetup(key) {
+  const panel = document.getElementById(`panel-${key}`);
+  if (!panel || panel.dataset.panelSetup === '1') return;
+  panel.dataset.panelSetup = '1';
+  if (key === 'policy') {
+    setupPolicyPanel();
+    if (isActivePanel('policy')) {
+      refreshPolicyPanelSections(panel, {
+        items: window.__policyCacheItems || [],
+        groups: window.__policyCacheGroups || [],
+        stats: window.__policyCacheStats,
+        commodityIntel: window.__policyCommodityIntel,
+      });
+    }
+  } else if (key === 'geopolitics') {
+    setupGeopoliticsPanel();
+    if (isActivePanel('geopolitics')) refreshGeopoliticsPanelSections(panel);
+  } else if (key === 'climate') {
+    setupClimatePanel();
+    if (isActivePanel('climate')) refreshClimatePanelSections(panel);
+  } else if (key === 'fed') setupCentralBankPanel('fed');
+  else if (key === 'boj') setupCentralBankPanel('boj');
+  else if (key === 'commodities' && window.CommoditiesUI?.ensureInit) {
+    window.CommoditiesUI.ensureInit(window.__preloadedCommoditiesLive);
+  } else if (key === 'commodities' && window.CommoditiesUI?.init) {
+    window.CommoditiesUI.init();
+  }
+}
+
+function wireDeferredPanelSetup() {
+  initPanelSetup(activeTab);
+  const panelsRoot = $('#panels');
+  if (!panelsRoot) return;
+  if (panelInitObserver) panelInitObserver.disconnect();
+  if (typeof IntersectionObserver === 'undefined') {
+    for (const key of TAB_KEYS) {
+      if (key !== activeTab) initPanelSetup(key);
+    }
+    return;
+  }
+  panelInitObserver = new IntersectionObserver(
+    (entries) => {
+      for (const entry of entries) {
+        if (!entry.isIntersecting) continue;
+        const key = entry.target.id?.replace(/^panel-/, '');
+        if (key) initPanelSetup(key);
+        panelInitObserver.unobserve(entry.target);
+      }
+    },
+    { root: panelsRoot, rootMargin: '80px 0px', threshold: 0.01 }
+  );
+  for (const key of TAB_KEYS) {
+    if (key === activeTab) continue;
+    const panel = document.getElementById(`panel-${key}`);
+    if (panel && panel.dataset.panelSetup !== '1') panelInitObserver.observe(panel);
+  }
 }
 
 function setListHtmlBatched(container, rowHtmlStrings, wrapperClass, moreHint = '') {
@@ -1022,13 +1229,7 @@ function renderPolicyReadingList(items) {
   if (!items.length) {
     return '<div class="empty-state policy-feed-empty">当前筛选条件下暂无政策</div>';
   }
-  const limited = limitDisplayItems(items, POLICY_DISPLAY_LIMIT);
-  const listHtml = limited.map((item, i) => renderPolicyReadingCard(item, i + 1)).join('');
-  const moreHint =
-    items.length > limited.length
-      ? `<p class="policy-note">已展示 ${limited.length} / ${items.length} 条，请使用筛选缩小范围</p>`
-      : '';
-  return `<div class="policy-reading-list">${listHtml}</div>${moreHint}`;
+  return '<div class="virtual-list-pending" aria-hidden="true"></div>';
 }
 
 function renderPolicyDeptChips(source) {
@@ -1709,16 +1910,34 @@ function refreshPolicyPanelSections(panel, source) {
       }
     } else {
       const listItems = limitDisplayItems(getFilteredPolicyItemsForView(fullSource.items), POLICY_DISPLAY_LIMIT);
-      const rows = listItems.map((item, i) => renderPolicyReadingCard(item, i + 1));
       const moreHint =
         fullSource.items.length > listItems.length
           ? `<p class="policy-note">已展示 ${listItems.length} / ${fullSource.items.length} 条，请使用筛选缩小范围</p>`
           : '';
-      if (!rows.length) {
+      const listHash = hashListInputs([
+        'policy',
+        policyViewMode,
+        policyFilterDept,
+        policyFilterRegion,
+        policyMinStars,
+        listItems.length,
+        listItems[0]?.id,
+        listItems.at(-1)?.id,
+      ]);
+      if (!listItems.length) {
         scroll.innerHTML = '<div class="empty-state policy-feed-empty">当前筛选条件下暂无政策</div>';
         scroll.dataset.listHash = 'empty';
-      } else {
-        setListHtmlBatched(scroll, rows, 'policy-reading-list', moreHint);
+        destroyVirtualList(scroll);
+      } else if (scroll.dataset.listHash !== listHash) {
+        scroll.dataset.listHash = listHash;
+        scroll.scrollTop = 0;
+        const mount = () =>
+          mountVirtualReadingList(scroll, listItems, renderPolicyReadingCard, {
+            listClass: 'policy-reading-list',
+            moreHint,
+          });
+        if (listItems.length > 50) scheduleRafWork(mount);
+        else mount();
       }
     }
     scroll.classList.toggle('policy-reading-scroll-hidden', policyViewMode === 'commodity');
@@ -1733,7 +1952,7 @@ function refreshPolicyPanelSections(panel, source) {
   updateNavTabBadge('policy', null);
 }
 
-const refreshPolicyPanelSectionsDebounced = debounce(refreshPolicyPanelSections, 350);
+const refreshPolicyPanelSectionsDebounced = debounce(refreshPolicyPanelSections, FILTER_DEBOUNCE_MS);
 
 function renderPolicyFeedDivider(source) {
   if (policyViewMode === 'commodity') return '';
@@ -2084,13 +2303,7 @@ function renderGeopoliticsReadingList(items) {
   if (!items.length) {
     return '<div class="empty-state policy-feed-empty">当前筛选条件下暂无地缘动态</div>';
   }
-  const limited = limitDisplayItems(items, GEO_DISPLAY_LIMIT);
-  const listHtml = limited.map((item, i) => renderGeopoliticsReadingCard(item, i + 1)).join('');
-  const moreHint =
-    items.length > limited.length
-      ? `<p class="policy-note geo-note">已展示 ${limited.length} / ${items.length} 条，请使用筛选缩小范围</p>`
-      : '';
-  return `<div class="policy-reading-list geo-reading-list">${listHtml}</div>${moreHint}`;
+  return '<div class="virtual-list-pending" aria-hidden="true"></div>';
 }
 
 function renderGeopoliticsCountryCatalog(source) {
@@ -2221,23 +2434,42 @@ function refreshGeopoliticsPanelSections(panel, source) {
       }
     } else {
       const limited = limitDisplayItems(filtered, GEO_DISPLAY_LIMIT);
-      const rows = limited.map((item, i) => renderGeopoliticsReadingCard(item, i + 1));
       const moreHint =
         filtered.length > limited.length
           ? `<p class="policy-note geo-note">已展示 ${limited.length} / ${filtered.length} 条，请使用筛选缩小范围</p>`
           : '';
-      if (!rows.length) {
+      const listHash = hashListInputs([
+        'geo',
+        geoViewMode,
+        geoFilterRegion,
+        geoFilterDimension,
+        geoFilterCountry,
+        geoMinStars,
+        limited.length,
+        limited[0]?.id,
+        limited.at(-1)?.id,
+      ]);
+      if (!limited.length) {
         scroll.innerHTML = '<div class="empty-state policy-feed-empty">当前筛选条件下暂无地缘动态</div>';
         scroll.dataset.listHash = 'empty';
-      } else {
-        setListHtmlBatched(scroll, rows, 'policy-reading-list geo-reading-list', moreHint);
+        destroyVirtualList(scroll);
+      } else if (scroll.dataset.listHash !== listHash) {
+        scroll.dataset.listHash = listHash;
+        scroll.scrollTop = 0;
+        const mount = () =>
+          mountVirtualReadingList(scroll, limited, renderGeopoliticsReadingCard, {
+            listClass: 'policy-reading-list geo-reading-list',
+            moreHint,
+          });
+        if (limited.length > 50) scheduleRafWork(mount);
+        else mount();
       }
     }
   }
   updateNavTabBadge('geopolitics', null);
 }
 
-const refreshGeopoliticsPanelSectionsDebounced = debounce(refreshGeopoliticsPanelSections, 350);
+const refreshGeopoliticsPanelSectionsDebounced = debounce(refreshGeopoliticsPanelSections, FILTER_DEBOUNCE_MS);
 
 function filterBaseClimateItems(items) {
   let list = items || [];
@@ -2389,13 +2621,7 @@ function renderClimateReadingList(items) {
   if (!items.length) {
     return '<div class="empty-state policy-feed-empty">当前筛选条件下暂无气候动态</div>';
   }
-  const limited = limitDisplayItems(items, CLIMATE_DISPLAY_LIMIT);
-  const listHtml = limited.map((item, i) => renderClimateReadingCard(item, i + 1)).join('');
-  const moreHint =
-    items.length > limited.length
-      ? `<p class="policy-note climate-note">已展示 ${limited.length} / ${items.length} 条，请使用筛选缩小范围</p>`
-      : '';
-  return `<div class="policy-reading-list climate-reading-list">${listHtml}</div>${moreHint}`;
+  return '<div class="virtual-list-pending" aria-hidden="true"></div>';
 }
 
 function renderClimatePanel(source) {
@@ -2479,22 +2705,40 @@ function refreshClimatePanelSections(panel, source) {
       return new Date(b.pubDate || 0) - new Date(a.pubDate || 0);
     });
     const limited = limitDisplayItems(filtered, CLIMATE_DISPLAY_LIMIT);
-    const rows = limited.map((item, i) => renderClimateReadingCard(item, i + 1));
     const moreHint =
       filtered.length > limited.length
         ? `<p class="policy-note climate-note">已展示 ${limited.length} / ${filtered.length} 条，请使用筛选缩小范围</p>`
         : '';
-    if (!rows.length) {
+    const listHash = hashListInputs([
+      'climate',
+      climateViewMode,
+      climateFilterRegion,
+      climateFilterCategory,
+      climateMinStars,
+      limited.length,
+      limited[0]?.id,
+      limited.at(-1)?.id,
+    ]);
+    if (!limited.length) {
       scroll.innerHTML = '<div class="empty-state policy-feed-empty">当前筛选条件下暂无气候动态</div>';
       scroll.dataset.listHash = 'empty';
-    } else {
-      setListHtmlBatched(scroll, rows, 'policy-reading-list climate-reading-list', moreHint);
+      destroyVirtualList(scroll);
+    } else if (scroll.dataset.listHash !== listHash) {
+      scroll.dataset.listHash = listHash;
+      scroll.scrollTop = 0;
+      const mount = () =>
+        mountVirtualReadingList(scroll, limited, renderClimateReadingCard, {
+          listClass: 'policy-reading-list climate-reading-list',
+          moreHint,
+        });
+      if (limited.length > 50) scheduleRafWork(mount);
+      else mount();
     }
   }
   updateNavTabBadge('climate', null);
 }
 
-const refreshClimatePanelSectionsDebounced = debounce(refreshClimatePanelSections, 380);
+const refreshClimatePanelSectionsDebounced = debounce(refreshClimatePanelSections, FILTER_DEBOUNCE_MS);
 
 function renderPolicyPanel(source) {
   const hasData = source.items?.length;
@@ -2770,6 +3014,20 @@ function applyIncrementalDataUpdate(data, { fromCache = false } = {}) {
     patchPolicyCommodityIntelFromClimate(sources.climate);
   }
 
+  if (rendererPaused) {
+    if (!isActivePanel('policy') && sources.policy?.items?.length) {
+      updateNavTabBadge('policy', sources.policy.items.length);
+    }
+    if (!isActivePanel('geopolitics') && sources.geopolitics?.items?.length) {
+      updateNavTabBadge('geopolitics', sources.geopolitics.items.length);
+    }
+    if (!isActivePanel('climate') && sources.climate?.items?.length) {
+      updateNavTabBadge('climate', sources.climate.items.length);
+    }
+    pendingRenderData = data;
+    return;
+  }
+
   if (!isActivePanel('policy') && sources.policy?.items?.length) {
     updateNavTabBadge('policy', sources.policy.items.length);
   }
@@ -2903,19 +3161,14 @@ function executeRenderAll(data) {
 
   setupIndexCards();
   setupHistorySection();
-  setupPolicyPanel();
-  setupGeopoliticsPanel();
-  setupClimatePanel();
-  setupCentralBankPanel('fed');
-  setupCentralBankPanel('boj');
-  if (!savedCommodities && TAB_KEYS.includes('commodities') && window.CommoditiesUI?.ensureInit) {
-    window.CommoditiesUI.ensureInit(window.__preloadedCommoditiesLive);
-  } else if (!savedCommodities && TAB_KEYS.includes('commodities')) {
-    window.CommoditiesUI.init();
-  }
+  wireDeferredPanelSetup();
 }
 
 function renderAll(data) {
+  if (rendererPaused) {
+    pendingRenderData = data;
+    return;
+  }
   pendingRenderData = data;
   if (renderAllScheduled) return;
   renderAllScheduled = true;
@@ -3375,7 +3628,7 @@ function startPolicyLiveTimer() {
 
 function applyPolicyLiveData(source) {
   const panel = document.getElementById('panel-policy');
-  if (!panel || !source?.items?.length || !isActivePanel('policy')) return;
+  if (!panel || !source?.items?.length || !isActivePanel('policy') || rendererPaused) return;
 
   const prevIds = window.__policyKnownIds || new Set();
   const newIds = new Set();
@@ -3590,6 +3843,7 @@ function applyGeopoliticsLiveData(source) {
     updateNavTabBadge('geopolitics', source.items.length);
     return;
   }
+  if (rendererPaused) return;
 
   const panel = document.getElementById('panel-geopolitics');
   if (panel) refreshGeopoliticsPanelSectionsDebounced(panel, source);
@@ -3726,6 +3980,7 @@ function applyClimateLiveData(source) {
     updateNavTabBadge('climate', source.items.length);
     return;
   }
+  if (rendererPaused) return;
 
   const panel = document.getElementById('panel-climate');
   if (panel) refreshClimatePanelSectionsDebounced(panel, source);
@@ -3854,9 +4109,6 @@ function switchTab(key) {
       const placeholder = renderPanel(key, {});
       panels.insertAdjacentHTML('beforeend', placeholder);
       panel = document.getElementById(`panel-${key}`);
-      if (key === 'geopolitics') setupGeopoliticsPanel();
-      if (key === 'climate') setupClimatePanel();
-      if (key === 'policy') setupPolicyPanel();
     }
   }
   $$('.panel').forEach((p) => p.classList.toggle('active', p.id === `panel-${key}`));
@@ -3871,13 +4123,14 @@ function switchTab(key) {
     key === 'fed' ||
     key === 'boj';
   $('#liveBadge')?.classList.toggle('hidden', !showLive);
+  initPanelSetup(key);
   if (key === 'commodities') window.CommoditiesUI.onTabActivated();
   if (key === 'macro') refreshMacroLive();
   if (key === 'policy') {
     initPolicyCommodityPanel().then(() => {
-      const panel = document.getElementById('panel-policy');
-      if (panel) {
-        refreshPolicyPanelSections(panel, {
+      const policyPanel = document.getElementById('panel-policy');
+      if (policyPanel) {
+        refreshPolicyPanelSections(policyPanel, {
           items: window.__policyCacheItems || [],
           groups: window.__policyCacheGroups || [],
           stats: window.__policyCacheStats,
@@ -3885,14 +4138,10 @@ function switchTab(key) {
         });
       }
     });
-  }
-  if (key === 'geopolitics') {
-    const panel = document.getElementById('panel-geopolitics');
-    if (panel) refreshGeopoliticsPanelSections(panel);
-  }
-  if (key === 'climate') {
-    const panel = document.getElementById('panel-climate');
-    if (panel) refreshClimatePanelSections(panel);
+  } else if (key === 'geopolitics') {
+    refreshGeopoliticsPanelSections(document.getElementById('panel-geopolitics'));
+  } else if (key === 'climate') {
+    refreshClimatePanelSections(document.getElementById('panel-climate'));
   }
   if (key === 'fed') {
     repatchCbSpeechesInDom('fed');
@@ -4482,6 +4731,7 @@ async function bootstrapApp() {
     }
 
     startAutoRefresh();
+    bindWindowFocusHandlers();
     if (
       activeTab === 'indices' ||
       activeTab === 'commodities' ||

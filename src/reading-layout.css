@@ -146,6 +146,29 @@
 
 .policy-reading-scroll {
   max-height: calc(100vh - 300px);
+  content-visibility: auto;
+  contain-intrinsic-size: auto 480px;
+}
+
+.geo-reading-scroll,
+.climate-reading-scroll {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 480px;
+}
+
+.policy-reading-row,
+.geo-reading-row,
+.climate-reading-row {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 112px;
+}
+
+.virtual-list-spacer {
+  width: 100%;
+}
+
+.virtual-list-window {
+  will-change: transform;
 }
 
 .reading-list,

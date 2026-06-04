@@ -30,11 +30,10 @@ const {
 } = require('../services/commodities-news');
 
 let mainWindow;
-let forexPushTimer = null;
-let policyPushTimer = null;
-let geopoliticsPushTimer = null;
-let climatePushTimer = null;
-let centralBankPushTimer = null;
+let unifiedPushTimer = null;
+let pushCycleIndex = 0;
+let windowInteractive = true;
+let pushLoopsPaused = false;
 const lastPushHashByChannel = {};
 const lastPushAtByChannel = {};
 const pendingPushByChannel = {};
@@ -56,7 +55,7 @@ function hashCentralBankPayload(data) {
 }
 
 function pushToRenderer(channel, data, hashFn) {
-  if (!mainWindow || mainWindow.isDestroyed() || !data) return;
+  if (!mainWindow || mainWindow.isDestroyed() || !data || !windowInteractive) return;
   if (mainWindow.webContents.isLoading()) return;
   const hash = hashFn(data);
   if (!hash || lastPushHashByChannel[channel] === hash) return;
@@ -132,84 +131,40 @@ function makePushTick(fetchFn, refreshFn, pushFn) {
   };
 }
 
-function startForexPushLoop() {
-  if (forexPushTimer) clearInterval(forexPushTimer);
-  const tick = makePushTick(fetchForexLive, refreshForexLiveInBackground, pushForexLiveToRenderer);
-  setTimeout(tick, 5000);
-  forexPushTimer = setInterval(tick, getForexRefreshMs() + 5000);
+function clearUnifiedPushTimer() {
+  if (unifiedPushTimer) clearInterval(unifiedPushTimer);
+  unifiedPushTimer = null;
 }
 
-function getPolicyRefreshMs() {
-  const seconds = config.readConfig().policyRefreshSeconds;
-  const resolved = Number.isFinite(seconds) ? seconds : 45;
-  return Math.max(30, Math.min(300, resolved)) * 1000;
+function setWindowInteractive(active) {
+  windowInteractive = active;
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.setBackgroundThrottling(!active);
+  }
+  if (active && !pushLoopsPaused) {
+    runPushCycle(true);
+  }
 }
 
-function pushPolicyLiveToRenderer(data) {
-  if (!data?.items?.length) return;
-  pushToRenderer('policy-live', data, hashLiveItemsPayload);
+function pausePushLoops() {
+  pushLoopsPaused = true;
+  clearUnifiedPushTimer();
+  for (const key of Object.keys(pushFlushTimers)) {
+    clearTimeout(pushFlushTimers[key]);
+    delete pushFlushTimers[key];
+  }
 }
 
-function pushGeopoliticsLiveToRenderer(data) {
-  if (!data?.items?.length) return;
-  pushToRenderer('geopolitics-live', data, hashLiveItemsPayload);
+function resumePushLoops() {
+  if (!pushLoopsPaused) return;
+  pushLoopsPaused = false;
+  startUnifiedPushLoop();
 }
 
-function startGeopoliticsPushLoop() {
-  if (geopoliticsPushTimer) clearInterval(geopoliticsPushTimer);
-  const tick = makePushTick(
-    fetchGeopoliticsLive,
-    refreshGeopoliticsInBackground,
-    pushGeopoliticsLiveToRenderer
-  );
-  setTimeout(tick, 15000);
-  geopoliticsPushTimer = setInterval(tick, getPolicyRefreshMs() + 15000);
-}
-
-function pushClimateLiveToRenderer(data) {
-  if (!data?.items?.length) return;
-  pushToRenderer('climate-live', data, hashLiveItemsPayload);
-}
-
-function startClimatePushLoop() {
-  if (climatePushTimer) clearInterval(climatePushTimer);
-  const tick = makePushTick(fetchClimateLive, refreshClimateInBackground, pushClimateLiveToRenderer);
-  setTimeout(tick, 22000);
-  climatePushTimer = setInterval(tick, getPolicyRefreshMs() + 20000);
-}
-
-function startPolicyPushLoop() {
-  if (policyPushTimer) clearInterval(policyPushTimer);
-  const tick = makePushTick(fetchPolicyLive, refreshPolicyLiveInBackground, pushPolicyLiveToRenderer);
-  setTimeout(tick, 10000);
-  policyPushTimer = setInterval(tick, getPolicyRefreshMs() + 5000);
-}
-
-function getCentralBankRefreshMs() {
-  const seconds = config.readConfig().policyRefreshSeconds;
-  const resolved = Number.isFinite(seconds) ? seconds : 30;
-  return Math.max(15, Math.min(300, resolved)) * 1000;
-}
-
-function hasCentralBankPayload(data) {
-  return Boolean(data?.news?.length || data?.indicators?.length || data?.speeches?.length);
-}
-
-function pushFedLiveToRenderer(data) {
-  if (!hasCentralBankPayload(data)) return;
-  pushToRenderer('fed-live', data, hashCentralBankPayload);
-}
-
-function pushBojLiveToRenderer(data) {
-  if (!hasCentralBankPayload(data)) return;
-  pushToRenderer('boj-live', data, hashCentralBankPayload);
-}
-
-function startCentralBankPushLoop() {
-  if (centralBankPushTimer) clearInterval(centralBankPushTimer);
+function makeCentralBankPushTick() {
   let busy = false;
-  const tick = async () => {
-    if (busy) return;
+  return async () => {
+    if (busy || !windowInteractive) return;
     busy = true;
     try {
       const [fed, boj] = await Promise.allSettled([fetchFedLive(), fetchBojLive()]);
@@ -235,8 +190,112 @@ function startCentralBankPushLoop() {
       busy = false;
     }
   };
-  setTimeout(tick, 8000);
-  centralBankPushTimer = setInterval(tick, getCentralBankRefreshMs() + 8000);
+}
+
+const pushCycleSteps = [
+  { name: 'forex', run: null },
+  { name: 'policy', run: null },
+  { name: 'geopolitics', run: null },
+  { name: 'climate', run: null },
+  { name: 'centralBank', run: null },
+];
+
+function initPushCycleSteps() {
+  pushCycleSteps[0].run = makePushTick(fetchForexLive, refreshForexLiveInBackground, pushForexLiveToRenderer);
+  pushCycleSteps[1].run = makePushTick(fetchPolicyLive, refreshPolicyLiveInBackground, pushPolicyLiveToRenderer);
+  pushCycleSteps[2].run = makePushTick(
+    fetchGeopoliticsLive,
+    refreshGeopoliticsInBackground,
+    pushGeopoliticsLiveToRenderer
+  );
+  pushCycleSteps[3].run = makePushTick(fetchClimateLive, refreshClimateInBackground, pushClimateLiveToRenderer);
+  pushCycleSteps[4].run = makeCentralBankPushTick();
+}
+
+async function runPushCycle(force = false) {
+  if (pushLoopsPaused || !windowInteractive) return;
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  if (!force && mainWindow.isMinimized() && !mainWindow.isFocused()) return;
+  if (!pushCycleSteps[0].run) initPushCycleSteps();
+  const step = pushCycleSteps[pushCycleIndex % pushCycleSteps.length];
+  pushCycleIndex += 1;
+  try {
+    await step.run();
+  } catch {
+    // ignore
+  }
+}
+
+function startUnifiedPushLoop() {
+  clearUnifiedPushTimer();
+  if (pushLoopsPaused) return;
+  initPushCycleSteps();
+  const baseMs =
+    Math.max(getForexRefreshMs(), getPolicyRefreshMs(), getCentralBankRefreshMs()) + 12000;
+  const stepMs = Math.max(8000, Math.floor(baseMs / pushCycleSteps.length));
+  setTimeout(() => runPushCycle(true), 5000);
+  unifiedPushTimer = setInterval(() => runPushCycle(false), stepMs);
+}
+
+function startForexPushLoop() {
+  startUnifiedPushLoop();
+}
+
+function startGeopoliticsPushLoop() {
+  startUnifiedPushLoop();
+}
+
+function startClimatePushLoop() {
+  startUnifiedPushLoop();
+}
+
+function startPolicyPushLoop() {
+  startUnifiedPushLoop();
+}
+
+function startCentralBankPushLoop() {
+  startUnifiedPushLoop();
+}
+
+function getPolicyRefreshMs() {
+  const seconds = config.readConfig().policyRefreshSeconds;
+  const resolved = Number.isFinite(seconds) ? seconds : 45;
+  return Math.max(30, Math.min(300, resolved)) * 1000;
+}
+
+function pushPolicyLiveToRenderer(data) {
+  if (!data?.items?.length) return;
+  pushToRenderer('policy-live', data, hashLiveItemsPayload);
+}
+
+function pushGeopoliticsLiveToRenderer(data) {
+  if (!data?.items?.length) return;
+  pushToRenderer('geopolitics-live', data, hashLiveItemsPayload);
+}
+
+function pushClimateLiveToRenderer(data) {
+  if (!data?.items?.length) return;
+  pushToRenderer('climate-live', data, hashLiveItemsPayload);
+}
+
+function getCentralBankRefreshMs() {
+  const seconds = config.readConfig().policyRefreshSeconds;
+  const resolved = Number.isFinite(seconds) ? seconds : 30;
+  return Math.max(15, Math.min(300, resolved)) * 1000;
+}
+
+function hasCentralBankPayload(data) {
+  return Boolean(data?.news?.length || data?.indicators?.length || data?.speeches?.length);
+}
+
+function pushFedLiveToRenderer(data) {
+  if (!hasCentralBankPayload(data)) return;
+  pushToRenderer('fed-live', data, hashCentralBankPayload);
+}
+
+function pushBojLiveToRenderer(data) {
+  if (!hasCentralBankPayload(data)) return;
+  pushToRenderer('boj-live', data, hashCentralBankPayload);
 }
 
 function createWindow() {
@@ -256,6 +315,26 @@ function createWindow() {
 
   mainWindow.loadFile(path.join(__dirname, '../src/index.html'));
   mainWindow.setMenuBarVisibility(false);
+  mainWindow.webContents.setBackgroundThrottling(false);
+
+  const notifyFocus = (focused) => {
+    setWindowInteractive(focused);
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('window-focus-changed', { focused });
+    }
+  };
+  mainWindow.on('focus', () => notifyFocus(true));
+  mainWindow.on('blur', () => notifyFocus(false));
+  mainWindow.on('minimize', () => pausePushLoops());
+  mainWindow.on('restore', () => {
+    resumePushLoops();
+    notifyFocus(true);
+  });
+  mainWindow.on('hide', () => pausePushLoops());
+  mainWindow.on('show', () => {
+    resumePushLoops();
+    notifyFocus(true);
+  });
 
   mainWindow.webContents.on('did-finish-load', () => {
     const payload = getPushStartupPayload();
@@ -278,13 +357,7 @@ app.whenReady().then(() => {
     }
   });
   createWindow();
-  setTimeout(() => {
-    startForexPushLoop();
-    startPolicyPushLoop();
-    startGeopoliticsPushLoop();
-    startClimatePushLoop();
-    startCentralBankPushLoop();
-  }, 3000);
+  setTimeout(() => startUnifiedPushLoop(), 3000);
   setTimeout(() => prefetchAfterStartup(), 12000);
   setInterval(() => flushAllCaches(), 5 * 60 * 1000);
 });
@@ -338,13 +411,8 @@ ipcMain.handle('get-config', async () => {
 
 ipcMain.handle('save-config', async (_event, partial) => {
   const saved = config.writeConfig(partial);
-  if (partial.forexRefreshSeconds != null) {
-    startForexPushLoop();
-  }
-  if (partial.policyRefreshSeconds != null) {
-    startPolicyPushLoop();
-    startGeopoliticsPushLoop();
-    startClimatePushLoop();
+  if (partial.forexRefreshSeconds != null || partial.policyRefreshSeconds != null) {
+    startUnifiedPushLoop();
   }
   return {
     ...saved,

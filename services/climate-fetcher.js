@@ -19,7 +19,7 @@ const { translateFinanceHeadline } = require('./finance-headline-translate');
 
 const CLIMATE_DISK_KEY = 'climate-radar.json';
 const CLIMATE_DISK_TTL_MS = 120 * 1000;
-const CLIMATE_PAYLOAD_ITEM_LIMIT = 120;
+const CLIMATE_PAYLOAD_ITEM_LIMIT = 200;
 const CLIMATE_SEARCH_QUERY_LIMIT = 14;
 const RSS_TIMEOUT_MS = 8000;
 
