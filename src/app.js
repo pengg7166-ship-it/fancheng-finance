@@ -333,7 +333,7 @@ function initPanelSetup(key) {
     if (isActivePanel('climate')) refreshClimatePanelSections(panel);
   } else if (key === 'outlook') {
     setupOutlookPanel();
-    if (isActivePanel('outlook')) refreshOutlookPanelSections(panel);
+    if (isActivePanel('outlook')) void activateOutlookTab();
   } else if (key === 'fed') setupCentralBankPanel('fed');
   else if (key === 'boj') setupCentralBankPanel('boj');
   else if (key === 'commodities' && window.CommoditiesUI?.ensureInit) {
@@ -2809,6 +2809,128 @@ function renderOutlookStatsInline(stats) {
   </div>`;
 }
 
+function getOutlookCachedSource() {
+  if (!window.__outlookCacheCategories?.length) return null;
+  return {
+    categories: window.__outlookCacheCategories,
+    factors: window.__outlookCacheFactors,
+    framework: window.__outlookCacheFramework,
+    stats: window.__outlookCacheStats,
+    dataLabel: '大宗商品走势研判 · 多因子规则评分 · 短/中/长期展望',
+    liveRefreshedAt: window.__outlookCacheLiveAt,
+    updatedAt: window.__outlookCacheUpdatedAt,
+  };
+}
+
+function cacheOutlookSource(source) {
+  if (!source) return;
+  if (source.error) window.__outlookLoadError = source.error;
+  if (!source.categories?.length) return;
+  window.__outlookCacheCategories = source.categories;
+  window.__outlookCacheFactors = source.factors;
+  window.__outlookCacheFramework = source.framework;
+  window.__outlookCacheStats = source.stats;
+  window.__outlookCacheLiveAt = source.liveRefreshedAt || source.updatedAt;
+  window.__outlookCacheUpdatedAt = source.updatedAt;
+  window.__outlookLoadError = null;
+  window.__outlookEmptyReady = false;
+}
+
+function isOutlookPanelPlaceholder(panel) {
+  return Boolean(panel && !panel.querySelector('.outlook-panel'));
+}
+
+function renderOutlookPlaceholder(source = {}) {
+  const err = source.error || window.__outlookLoadError;
+  if (err) {
+    return `<div class="panel ${activeTab === 'outlook' ? 'active' : ''}" id="panel-outlook" role="tabpanel">
+      <div class="empty-state outlook-empty-state">
+        <p>大宗走势研判加载失败：${escapeHtml(localizeUiMessage(err))}</p>
+        <button type="button" class="btn-secondary" data-action="retry-outlook">重试</button>
+      </div>
+    </div>`;
+  }
+  if (source._placeholder === 'empty' || window.__outlookEmptyReady) {
+    return `<div class="panel ${activeTab === 'outlook' ? 'active' : ''}" id="panel-outlook" role="tabpanel">
+      <div class="empty-state outlook-empty-state">
+        <p>数据积累中，指数/外汇/政策等源就绪后将生成研判。</p>
+        <button type="button" class="btn-secondary" data-action="retry-outlook">刷新研判</button>
+      </div>
+    </div>`;
+  }
+  return `<div class="panel ${activeTab === 'outlook' ? 'active' : ''}" id="panel-outlook" role="tabpanel">
+    <div class="empty-state outlook-empty-state"><div class="spinner inline-spinner"></div> 正在加载大宗走势研判…</div>
+  </div>`;
+}
+
+function mountOutlookPanel(source) {
+  const panel = document.getElementById('panel-outlook');
+  if (!panel) return;
+  if (source?.categories?.length) {
+    cacheOutlookSource(source);
+    if (isOutlookPanelPlaceholder(panel)) {
+      replaceSinglePanel('outlook', source);
+      setupOutlookPanel();
+    } else if (isActivePanel('outlook')) {
+      refreshOutlookPanelSectionsDebounced(panel, source);
+    }
+    return;
+  }
+  if (!isActivePanel('outlook')) return;
+  replaceSinglePanel('outlook', source);
+  setupOutlookPanel();
+}
+
+async function refreshOutlookLive(options = {}) {
+  if (!window.fancheng?.fetchOutlookLive) {
+    window.__outlookEmptyReady = true;
+    if (isActivePanel('outlook')) mountOutlookPanel({ _placeholder: 'empty' });
+    return;
+  }
+  try {
+    const outlook = await window.fancheng.fetchOutlookLive(options);
+    if (outlook?.error) {
+      window.__outlookLoadError = outlook.error;
+      if (isActivePanel('outlook')) mountOutlookPanel(outlook);
+      return;
+    }
+    if (outlook?.categories?.length) {
+      applyOutlookLiveData(outlook);
+      return;
+    }
+    window.__outlookEmptyReady = true;
+    if (isActivePanel('outlook')) mountOutlookPanel({ _placeholder: 'empty', ...outlook });
+  } catch (err) {
+    window.__outlookLoadError = localizeUiMessage(err.message || '研判刷新失败');
+    if (isActivePanel('outlook')) mountOutlookPanel({ error: window.__outlookLoadError });
+  }
+}
+
+async function activateOutlookTab() {
+  const cached = getOutlookCachedSource();
+  if (cached?.categories?.length) {
+    mountOutlookPanel(cached);
+    return;
+  }
+  const panel = document.getElementById('panel-outlook');
+  if (panel && isOutlookPanelPlaceholder(panel)) {
+    replaceSinglePanel('outlook', {});
+  }
+  const slowTimer = setTimeout(() => {
+    if (!isActivePanel('outlook')) return;
+    const p = document.getElementById('panel-outlook');
+    if (p && isOutlookPanelPlaceholder(p) && !getOutlookCachedSource()) {
+      window.__outlookEmptyReady = true;
+      mountOutlookPanel({ _placeholder: 'empty' });
+    }
+  }, 2000);
+  try {
+    await refreshOutlookLive({ force: true });
+  } finally {
+    clearTimeout(slowTimer);
+  }
+}
+
 function renderOutlookPanel(source) {
   const hasData = source.categories?.length;
   const liveTag = source.liveRefreshedAt
@@ -2816,9 +2938,7 @@ function renderOutlookPanel(source) {
     : '';
 
   if (!hasData) {
-    return `<div class="panel ${activeTab === 'outlook' ? 'active' : ''}" id="panel-outlook" role="tabpanel">
-      <div class="empty-state">正在加载大宗走势研判…</div>
-    </div>`;
+    return renderOutlookPlaceholder(source);
   }
 
   window.__outlookCacheCategories = source.categories;
@@ -2903,15 +3023,26 @@ function setupOutlookPanel() {
   const panel = document.getElementById('panel-outlook');
   if (!panel || panel.dataset.outlookSetup === '1') return;
   panel.dataset.outlookSetup = '1';
+  panel.addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-action="retry-outlook"]');
+    if (!btn) return;
+    e.preventDefault();
+    window.__outlookLoadError = null;
+    window.__outlookEmptyReady = false;
+    replaceSinglePanel('outlook', {});
+    void refreshOutlookLive({ force: true });
+  });
 }
 
 function applyOutlookLiveData(source) {
+  if (source?.error) {
+    window.__outlookLoadError = source.error;
+    if (isActivePanel('outlook') && !rendererPaused) mountOutlookPanel(source);
+    return;
+  }
   if (!source?.categories?.length) return;
 
-  window.__outlookCacheCategories = source.categories;
-  window.__outlookCacheFactors = source.factors;
-  window.__outlookCacheFramework = source.framework;
-  window.__outlookCacheStats = source.stats;
+  cacheOutlookSource(source);
 
   if (!isActivePanel('outlook')) {
     updateNavTabBadge('outlook', source.categories.length);
@@ -2919,10 +3050,10 @@ function applyOutlookLiveData(source) {
   }
   if (rendererPaused) return;
 
-  const panel = document.getElementById('panel-outlook');
-  if (panel) refreshOutlookPanelSectionsDebounced(panel, source);
+  mountOutlookPanel(source);
 
   const stamp = source.liveRefreshedAt || source.updatedAt;
+  const panel = document.getElementById('panel-outlook');
   const liveTag = panel?.querySelector('.outlook-live-tag');
   if (liveTag && stamp) {
     liveTag.innerHTML = `<span class="policy-live-dot"></span>实时 ${formatDate(stamp)}`;
@@ -3147,6 +3278,7 @@ function replaceSinglePanel(key, source) {
   if (key === 'policy') setupPolicyPanel();
   if (key === 'geopolitics') setupGeopoliticsPanel();
   if (key === 'climate') setupClimatePanel();
+  if (key === 'outlook') setupOutlookPanel();
   if (key === 'fed') setupCentralBankPanel('fed');
   if (key === 'boj') {
     repatchBojNewsInDom();
@@ -3223,6 +3355,10 @@ function applyIncrementalDataUpdate(data, { fromCache = false } = {}) {
     if (!isActivePanel('climate') && sources.climate?.items?.length) {
       updateNavTabBadge('climate', sources.climate.items.length);
     }
+    if (sources.outlook?.categories?.length) cacheOutlookSource(sources.outlook);
+    if (!isActivePanel('outlook') && sources.outlook?.categories?.length) {
+      updateNavTabBadge('outlook', sources.outlook.categories.length);
+    }
     pendingRenderData = data;
     return;
   }
@@ -3235,6 +3371,10 @@ function applyIncrementalDataUpdate(data, { fromCache = false } = {}) {
   }
   if (!isActivePanel('climate') && sources.climate?.items?.length) {
     updateNavTabBadge('climate', sources.climate.items.length);
+  }
+  if (sources.outlook?.categories?.length) cacheOutlookSource(sources.outlook);
+  if (!isActivePanel('outlook') && sources.outlook?.categories?.length) {
+    updateNavTabBadge('outlook', sources.outlook.categories.length);
   }
 
   if (hasIndexData(data)) {
@@ -3288,10 +3428,14 @@ function applyIncrementalDataUpdate(data, { fromCache = false } = {}) {
     }
   }
 
-  if (sources.outlook?.categories?.length && isActivePanel('outlook')) {
-    const panel = document.getElementById('panel-outlook');
-    if (panel?.querySelector('.outlook-panel')) {
-      refreshOutlookPanelSectionsDebounced(panel, sources.outlook);
+  if (sources.outlook?.categories?.length) {
+    if (isActivePanel('outlook')) {
+      const panel = document.getElementById('panel-outlook');
+      if (panel?.querySelector('.outlook-panel')) {
+        refreshOutlookPanelSectionsDebounced(panel, sources.outlook);
+      } else {
+        mountOutlookPanel(sources.outlook);
+      }
     }
   }
 
@@ -4350,7 +4494,7 @@ function switchTab(key) {
   } else if (key === 'climate') {
     refreshClimatePanelSections(document.getElementById('panel-climate'));
   } else if (key === 'outlook') {
-    refreshOutlookPanelSections(document.getElementById('panel-outlook'));
+    void activateOutlookTab();
   }
   if (key === 'fed') {
     repatchCbSpeechesInDom('fed');
@@ -4928,7 +5072,7 @@ async function bootstrapApp() {
           window.__climateCacheItems = data.sources.climate.items;
           applyClimateLiveData(data.sources.climate);
         }
-        if (activeTab === 'outlook' && data.sources?.outlook?.categories?.length) {
+        if (data.sources?.outlook?.categories?.length) {
           applyOutlookLiveData(data.sources.outlook);
         }
         if (activeTab === 'fed' && hasCentralBankLivePayload(data.sources?.fed)) {

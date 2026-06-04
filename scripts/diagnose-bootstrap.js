@@ -105,9 +105,14 @@ app.whenReady().then(async () => {
 
   const result = await win.webContents.executeJavaScript(`
     (async () => {
+      const outlookTab = document.querySelector('.tab[data-tab="outlook"]');
+      outlookTab?.click();
+      await new Promise((r) => setTimeout(r, 3500));
       const panels = document.getElementById('panels');
       const panelIds = [...document.querySelectorAll('.panel')].map(p => p.id);
       const activePanel = document.querySelector('.panel.active');
+      const outlookPanel = document.getElementById('panel-outlook');
+      const outlookText = outlookPanel?.innerText || '';
       return {
         lastUpdated: document.getElementById('lastUpdated')?.textContent,
         panelsHidden: panels?.classList.contains('hidden'),
@@ -115,6 +120,9 @@ app.whenReady().then(async () => {
         panelIds,
         activePanel: activePanel?.id,
         activeText: activePanel?.innerText?.slice(0, 160),
+        outlookHasContent: Boolean(outlookPanel?.querySelector('.outlook-panel')),
+        outlookStuckLoading: /正在加载大宗走势研判/.test(outlookText),
+        outlookText: outlookText.slice(0, 220),
         errorBanner: document.getElementById('errorBanner')?.innerText,
         version: document.getElementById('appVersion')?.textContent,
       };

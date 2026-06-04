@@ -476,9 +476,29 @@ function buildFactorsPanel(globalFactors) {
 }
 
 function buildCommodityOutlookFromSources(sources = {}) {
-  const globalFactors = buildFactorScores(sources);
-  const categories = buildCategoryOutlooks(sources);
-  const factors = buildFactorsPanel(globalFactors);
+  let globalFactors;
+  let categories;
+  let factors;
+  try {
+    globalFactors = buildFactorScores(sources);
+    categories = buildCategoryOutlooks(sources);
+    factors = buildFactorsPanel(globalFactors);
+  } catch (err) {
+    globalFactors = {};
+    categories = buildCategoryOutlooks({});
+    factors = buildFactorsPanel(globalFactors);
+    return {
+      key: 'outlook',
+      name: '大宗商品走势研判',
+      dataLabel: '大宗商品走势研判 · 多因子规则评分 · 短/中/长期展望',
+      categories,
+      factors,
+      framework: { logicModel: '多因子规则评分（部分输入异常，已降级）', version: 'v1.14.1' },
+      stats: { categoryCount: categories.length, factorCount: factors.length, dataQuality: 0, dataQualityLabel: '计算降级' },
+      updatedAt: new Date().toISOString(),
+      error: err?.message || '研判计算异常',
+    };
+  }
 
   const dataQuality = [
     sources.indices?.regions?.some((r) => r.indices?.length),
@@ -500,7 +520,7 @@ function buildCommodityOutlookFromSources(sources = {}) {
       logicModel: '美股流动性 → 美元 → 供需/气候/地缘 → 美联储/日央行 → 四大类大宗 outlook',
       horizons: HORIZON_LABELS,
       factorIds: FACTOR_DEFS.map((f) => f.id),
-      version: 'v1.14.0',
+      version: 'v1.14.1',
     },
     stats: {
       categoryCount: categories.length,

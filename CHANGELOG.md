@@ -1,5 +1,18 @@
 # 更新日志
 
+## v1.14.1 — 2026-06-04
+
+### 修复：大宗走势研判标签永久「正在加载」
+
+- **根因**：v1.13.6 增量更新仅在面板已有 `.outlook-panel` 时刷新 DOM；首次渲染为 loading 占位后，后台 `sources.outlook` 到达不会 `replaceSinglePanel`，切 tab 时 `refreshOutlookPanelSections` 也因无数据/无容器而空操作。
+- **修复**：
+  - 打开 outlook 标签：`activateOutlookTab` 用缓存或 IPC `fetchOutlookLive` 计算并 `mountOutlookPanel`（无内容则 skeleton → 2s 后「数据积累中」+ 重试）
+  - 增量/推送路径：无 `.outlook-panel` 时改 `replaceSinglePanel`；非激活标签缓存 + 徽章
+  - 失败态显示错误信息与重试按钮
+- 页脚版本 **v1.14.1**
+
+---
+
 ## v1.14.0 — 2026-06-04
 
 ### 新功能：大宗商品走势研判面板
