@@ -1,5 +1,11 @@
 # 在 GitHub 创建空仓库（首次备份前必做）
 
+## 最快方式（推荐）
+
+**双击 一键GitHub备份.bat**：会自动打开 [新建仓库（名称已预填 fancheng-finance）](https://github.com/new?name=fancheng-finance)，按提示创建**空仓库**后按回车，脚本会执行 git push -u origin main 并显示结果。
+
+仅推送、仓库已存在时：双击 **推送到GitHub.bat**。
+
 远程地址应为：**https://github.com/gaotianze/fancheng-finance.git**  
 当前检测：该页面若打开为 **404**，说明仓库尚未创建，请按下列步骤操作（约 2 分钟）。
 
