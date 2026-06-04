@@ -25,7 +25,7 @@ const OUTLOOK_DISK_KEY = 'commodity-outlook-v4.json';
 const OUTLOOK_DISK_TTL_MS = 60 * 1000;
 const OUTLOOK_RECOMPUTE_DEBOUNCE_MS = 800;
 const PRICE_OI_CHANGE_THRESHOLD_PCT = 0.15;
-const OUTLOOK_ENGINE_VERSION = 'v1.21.1';
+const OUTLOOK_ENGINE_VERSION = 'v1.22.0';
 
 /** 市场研判环境（条件权重，非固定） */
 const REGIME_IDS = ['riskOn', 'riskOff', 'liquidityPanic', 'supplyShock', 'weatherShock', 'neutral'];
@@ -1032,25 +1032,33 @@ function buildPredictionRationale({
     stressNote = `高星${highStars}条·极端缓冲`;
   }
 
-  const parts = [
-    '依据',
+  const line1 = [
     sigma != null ? `近20日σ${sigma.toFixed(2)}%` : null,
-    `当前${regime}`,
+    `环境${regime}`,
     emaPart,
     pct60 ? `60日${pct60}` : null,
-    newsCount ? `资讯${newsCount}条${topTitle ? `·${topTitle}` : ''}` : '无高星突发',
+  ]
+    .filter(Boolean)
+    .join(' · ');
+  const line2 = [
+    newsCount ? `资讯${newsCount}条命中${topTitle ? `「${topTitle}」` : ''}` : '资讯无高星突发',
     capScore != null ? `资金关注${capScore}/100` : null,
-    latency ? `${latency}` : null,
+    latency ? `双速${latency}` : null,
+  ]
+    .filter(Boolean)
+    .join(' · ');
+  const line3 = [
     chg,
     instant,
-    chg ? '已反映' : null,
     volPm != null ? `预测波动±${Number(volPm).toFixed(2)}%` : null,
     stressNote,
-  ].filter(Boolean);
+  ]
+    .filter(Boolean)
+    .join(' · ');
 
-  let text = parts.join('；');
-  if (text.length > 200) text = `${text.slice(0, 197)}…`;
-  return text;
+  const lines = [line1, line2, line3].filter((l) => l && l.length > 4);
+  if (!lines.length) return '依据：波动与资讯数据积累中';
+  return lines.slice(0, 3).join('\n');
 }
 
 function buildMacroScoresForInstrument(sources, bucketId) {
@@ -1200,10 +1208,12 @@ function buildScenarios({
   const bias = scoreToDirection(compositeScore);
   const base = buildScenarioBand(mid, halfWidth, bias, compositeScore);
 
-  const bullScore = clamp(compositeScore + (flowAligned ? 0.12 : 0.06), -1, 1);
-  const bearScore = clamp(compositeScore - (flowAligned ? 0.12 : 0.06), -1, 1);
-  const bull = buildScenarioBand(mid + halfWidth * 0.15, halfWidth * 0.82, 'bullish', bullScore);
-  const bear = buildScenarioBand(mid - halfWidth * 0.15, halfWidth * 0.82, 'bearish', bearScore);
+  const bullScore = clamp(compositeScore + (flowAligned ? 0.14 : 0.08), -1, 1);
+  const bearScore = clamp(compositeScore - (flowAligned ? 0.14 : 0.08), -1, 1);
+  const bullShift = halfWidth * (0.22 + Math.max(0, compositeScore) * 0.18);
+  const bearShift = halfWidth * (0.22 + Math.max(0, -compositeScore) * 0.18);
+  const bull = buildScenarioBand(mid + bullShift, halfWidth * 0.78, 'bullish', bullScore);
+  const bear = buildScenarioBand(mid - bearShift, halfWidth * 0.78, 'bearish', bearScore);
 
   const highStars = countHighStarNewsHits(newsFactor);
   const stressTriggered = volModel.isVolShockTriggered({ shockVol, smoothedVol, highStarCount: highStars });
@@ -1276,9 +1286,13 @@ function computeNextDayRangePct({
 }) {
   const classMax = getClassMaxPct(sector, instrumentId);
   const idLower = String(instrumentId || '').toLowerCase();
-  const sigma = historicalVol?.sigmaDaily20 ?? historicalVol?.histVol20d ?? 0.45;
-
-  const baselineVol = smoothedVol?.volForecastPct ?? sigma;
+  const sectorPrior = getSectorVolPrior(sector);
+  const sigma =
+    historicalVol?.sigmaDaily20 ??
+    historicalVol?.histVol20d ??
+    smoothedVol?.sigma20 ??
+    sectorPrior * 0.72;
+  const baselineVol = smoothedVol?.volForecastPct ?? Math.max(sectorPrior * 0.52, sigma);
   const highStarCount = countHighStarNewsHits(newsFactor);
   const shockVol =
     shockVolIn ??
@@ -1304,6 +1318,11 @@ function computeNextDayRangePct({
 
   if (smoothedVol?.regime === 'low') halfWidth *= 0.92;
   else if (smoothedVol?.regime === 'high') halfWidth *= 1.06;
+
+  const scoreSpread = Math.abs(compositeScore || 0) * 0.06;
+  const volRatioSpread = clamp(((volumeRatio ?? 1) - 1) * 0.14, -0.08, 0.22);
+  const intradaySpread = clamp(Math.abs(intradayChangePct || 0) * 0.04, 0, 0.18);
+  halfWidth = halfWidth * (1 + scoreSpread + volRatioSpread + intradaySpread);
 
   halfWidth = Math.min(halfWidth, classMax);
   halfWidth = Math.max(halfWidth, 0.12);
@@ -1355,6 +1374,18 @@ function computeNextDayRangePct({
     low = clamp(low, -effectiveMax, effectiveMax);
     high = clamp(high, -effectiveMax, effectiveMax);
     if (low > high) [low, high] = [high, low];
+  }
+
+  if (idLower === 'au' || idLower === 'pt' || idLower === 'pd') {
+    const maxSpan = idLower === 'au' ? 1.2 : 1.65;
+    const span = high - low;
+    if (span > maxSpan) {
+      const center = (high + low) / 2;
+      const half = maxSpan / 2;
+      low = +clamp(center - half, -maxSpan, maxSpan).toFixed(3);
+      high = +clamp(center + half, -maxSpan, maxSpan).toFixed(3);
+      halfWidth = Math.min(halfWidth, maxSpan / 2);
+    }
   }
 
   const expectedMovePct = (Math.abs(low - mid) + Math.abs(high - mid)) / 2;

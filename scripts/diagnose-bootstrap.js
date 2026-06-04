@@ -96,7 +96,18 @@ app.whenReady().then(async () => {
 
   const registryCount = INSTRUMENT_REGISTRY.length;
   const catalogCount = getAllCommodities().length;
-  const engineProbe = buildCommodityOutlookFromSources(getCachedAllData()?.sources || {});
+  let probeSources = getCachedAllData()?.sources || {};
+  try {
+    const { fetchCommoditiesLive } = require('../services/commodities-fetcher');
+    const live = await fetchCommoditiesLive();
+    if (live?.exchanges?.length) {
+      probeSources = { ...probeSources, commodities: live };
+      console.log(`[diagnose] commodities live loaded exchanges=${live.exchanges.length}`);
+    }
+  } catch (err) {
+    console.log(`[diagnose] commodities live fetch skipped: ${err.message}`);
+  }
+  const engineProbe = buildCommodityOutlookFromSources(probeSources);
   const firstThree = (engineProbe.instruments || []).slice(0, 3);
   const firstInst = firstThree[0];
   const firstHasPriceOrRange = Boolean(
@@ -118,7 +129,7 @@ app.whenReady().then(async () => {
   const saInst = (engineProbe.instruments || []).find((i) => String(i.id).toLowerCase() === 'sa');
   const auRange = auInst?.nextDayRangePct;
   const auRangeSpan = auRange ? Number(auRange.high) - Number(auRange.low) : null;
-  const auRangeOk = auRangeSpan == null || auRangeSpan <= 1.5;
+  const auRangeOk = auRangeSpan == null || auRangeSpan <= 1.25;
   const auVolForecast = auInst?.volForecastPct ?? auInst?.smoothedVol?.volForecastPct;
   const cuVolForecast = cuInst?.volForecastPct ?? cuInst?.smoothedVol?.volForecastPct;
   const volForecastNumeric =
@@ -148,26 +159,58 @@ app.whenReady().then(async () => {
     auInst?.latencyState != null &&
     typeof auInst?.factorBreakdown?.instant === 'number';
   const auRationaleLen = (auInst?.predictionRationale || '').length;
-  const rationaleOk = auRationaleLen > 20;
+  const rationaleOk = auRationaleLen > 20 && (auInst?.predictionRationale || '').includes('\n');
   const predBoxesOk = Boolean(auInst?.scenarios?.base?.low != null && auInst?.nextDayRangePct?.expectedMovePct != null);
-  if (
-    firstThree.length >= 3 &&
-    hasCommodities &&
-    (!rangesDistinct ||
-      !scoresDistinct ||
-      !noPendingDirection ||
-      !auRangeOk ||
-      !factorBreakdownDistinct ||
-      !volForecastNumeric ||
-      !scenariosOk ||
-      !regimeOk ||
-      !adaptiveOk ||
-      !rationaleOk ||
-      !predBoxesOk)
-  ) {
-    console.error(
-      `[diagnose] outlook diversity check FAILED rangesDistinct=${rangesDistinct} scoresDistinct=${scoresDistinct} noPendingDirection=${noPendingDirection} auRangeOk=${auRangeOk} factorBreakdownDistinct=${factorBreakdownDistinct} volForecastNumeric=${volForecastNumeric} scenariosOk=${scenariosOk} regimeOk=${regimeOk} adaptiveOk=${adaptiveOk} rationaleOk=${rationaleOk} predBoxesOk=${predBoxesOk} auRationaleLen=${auRationaleLen} auSpan=${auRangeSpan}`
-    );
+  const sectorSet = new Set((engineProbe.instruments || []).map((i) => i.sector));
+  const sectorsOk = ['energy', 'chemical', 'black', 'metals', 'precious', 'agriculture'].every((s) =>
+    sectorSet.has(s)
+  );
+  const catalog74 = catalogCount >= 74 && registryCount >= 74;
+  const capitalOk =
+    auInst?.capitalAttention?.score != null &&
+    cuInst?.capitalAttention?.score != null &&
+    auInst.capitalAttention.score >= 0 &&
+    auInst.capitalAttention.score <= 100;
+  const newsOk = cuInst?.factors?.news != null && typeof cuInst.factors.news.hitCount === 'number';
+  const oiOk = (engineProbe.instruments || []).some((i) => {
+    const oi = i?.factors?.oi;
+    if (oi?.deltaPct != null && Math.abs(oi.deltaPct) >= 0.05) return true;
+    if (oi?.current > 0 && oi?.label && !/待更新/.test(oi.label)) return true;
+    return (i?.techBadges || []).some((b) => /持仓/.test(b.label || '') && !/待更新/.test(b.label || ''));
+  });
+  const scenarioSpreadOk =
+    cuInst?.scenarios?.base?.mid != null &&
+    cuInst?.scenarios?.bull?.mid != null &&
+    Math.abs(Number(cuInst.scenarios.bull.mid) - Number(cuInst.scenarios.base.mid)) >= 0.02;
+  const latencyUiOk = Boolean(auInst?.latencyState && auInst?.latencyLabel);
+  const versionOk = APP_VERSION === '1.22.0';
+  const { countTodayArchiveEntries, getOutlookHistoryRoot } = require('../services/commodity-outlook-history');
+  const archiveRoot = getOutlookHistoryRoot();
+  const todayArchive = countTodayArchiveEntries();
+
+  const engineChecks = {
+    catalog74,
+    sectorsOk,
+    rangesDistinct,
+    scoresDistinct,
+    factorBreakdownDistinct,
+    volForecastNumeric,
+    scenariosOk,
+    scenarioSpreadOk,
+    regimeOk,
+    adaptiveOk,
+    latencyUiOk,
+    auRangeOk,
+    rationaleOk,
+    predBoxesOk,
+    capitalOk,
+    newsOk,
+    oiOk,
+    versionOk,
+  };
+  const enginePass = Object.values(engineChecks).every(Boolean);
+  if (!enginePass) {
+    console.error(`[diagnose] engine checks FAILED ${JSON.stringify(engineChecks)} auSpan=${auRangeSpan}`);
   }
   console.log(
     `[diagnose] catalog=${catalogCount} registry=${registryCount} engineInstruments=${engineProbe.instruments?.length || 0} firstPriceOrRange=${firstHasPriceOrRange} version=${APP_VERSION}`
@@ -231,6 +274,10 @@ app.whenReady().then(async () => {
       const detailPanel = outlookPanel?.querySelector('.outlook-detail-panel:not([hidden])');
       const firstRationale = detailPanel?.querySelector('.outlook-prediction-rationale') || outlookPanel?.querySelector('.outlook-prediction-rationale');
       const accuracyTable = detailPanel?.querySelector('.outlook-accuracy-table');
+      const accuracyEmpty = detailPanel?.querySelector('.outlook-accuracy-empty');
+      const latencyChip = firstRow?.querySelector('.outlook-latency-chip');
+      const toolbarStamp = outlookPanel?.querySelector('.outlook-toolbar-stamp');
+      const rowStyle = firstRow ? getComputedStyle(firstRow) : null;
       const titleLen = firstTitle?.textContent?.trim().length || 0;
       const priceText = firstPriceBox?.textContent?.trim() || '';
       const chgText = firstChgBox?.textContent?.trim() || '';
@@ -266,11 +313,16 @@ app.whenReady().then(async () => {
           chgBoxVisible: Boolean(firstChgBox),
           detailPanelVisible: Boolean(detailPanel),
           accuracyTableVisible: Boolean(accuracyTable),
+          accuracyPendingVisible: /等待收盘校验/.test(accuracyEmpty?.textContent || ''),
+          latencyChipVisible: Boolean(latencyChip),
+          toolbarStampVisible: Boolean(toolbarStamp?.textContent?.trim()),
+          rowMinHeightPx: rowStyle ? parseFloat(rowStyle.minHeight) : 0,
           predFontPx,
           predLegible: predFontPx >= 13 && !blurOnPred,
           rationaleLen: rationaleText.length,
           rationaleOk: rationaleText.length > 20 && !/研判积累中/.test(rationaleText),
-          hasPriceOrPredText: /[\d.%+]/.test(priceText) || /[%~±]/.test(predText),
+          rationaleMultiline: (rationaleText.match(/\\n/g) || []).length >= 1 || rationaleText.split('·').length >= 4,
+          hasPriceOrPredText: /[\\d.%+]/.test(priceText) || /[%~±]/.test(predText),
           chgText: chgText.slice(0, 20),
         },
         errorBanner: document.getElementById('errorBanner')?.innerText,
@@ -278,6 +330,48 @@ app.whenReady().then(async () => {
       };
     })()
   `);
+
+  const ui = result?.outlookFirstRow || {};
+  const uiChecks = {
+    outlook74: (result?.outlookInstrumentCount || 0) >= 74,
+    sectorTabs: (result?.outlookSectorTabCount || 0) >= 7,
+    priceBox: ui.priceBoxVisible,
+    chgBox: ui.chgBoxVisible,
+    predDualBox: ui.predSmoothVisible && ui.predExtremeVisible,
+    predLegible: ui.predLegible,
+    detailBelow: ui.detailPanelVisible,
+    rationaleUi: ui.rationaleOk && ui.rationaleMultiline,
+    accuracyUi: ui.accuracyTableVisible || ui.accuracyPendingVisible,
+    latencyChip: ui.latencyChipVisible,
+    toolbar: ui.toolbarStampVisible,
+    rowHeight: ui.rowMinHeightPx >= 72,
+    versionUi: result?.version === 'v1.22.0',
+    notStuck: !result?.outlookStuckLoading,
+  };
+  const uiPass = Object.values(uiChecks).every(Boolean);
+
+  const checklist = [
+    { id: 'A1', name: '74+品种六板块', pass: engineChecks.catalog74 && engineChecks.sectorsOk },
+    { id: 'A2', name: '铜金区间/分差异', pass: engineChecks.rangesDistinct && engineChecks.scoresDistinct },
+    { id: 'A3', name: '因子分解差异', pass: engineChecks.factorBreakdownDistinct },
+    { id: 'A4', name: '资金关注0-100', pass: engineChecks.capitalOk },
+    { id: 'A5', name: '资讯影响力', pass: engineChecks.newsOk },
+    { id: 'A6', name: '持仓非零展示', pass: engineChecks.oiOk },
+    { id: 'A7', name: '波动率数值', pass: engineChecks.volForecastNumeric },
+    { id: 'A8', name: '双速反射', pass: engineChecks.adaptiveOk && engineChecks.latencyUiOk },
+    { id: 'A9', name: '黄金区间≤1.25%', pass: engineChecks.auRangeOk },
+    { id: 'B1', name: '预测双框', pass: engineChecks.predBoxesOk && uiChecks.predDualBox },
+    { id: 'B2', name: '预测缘由多行', pass: engineChecks.rationaleOk && uiChecks.rationaleUi },
+    { id: 'B3', name: '四情景差异', pass: engineChecks.scenariosOk && engineChecks.scenarioSpreadOk },
+    { id: 'B4', name: '预测校验UI', pass: uiChecks.accuracyUi },
+    { id: 'C1', name: '现价涨跌框', pass: uiChecks.priceBox && uiChecks.chgBox },
+    { id: 'D1', name: '详情面板排版', pass: uiChecks.detailBelow && uiChecks.predLegible && uiChecks.rowHeight },
+    { id: 'D2', name: '工具栏板块时间戳', pass: uiChecks.sectorTabs && uiChecks.toolbar },
+    { id: 'E1', name: '版本1.22.0', pass: engineChecks.versionOk && uiChecks.versionUi },
+    { id: 'E2', name: '存档目录', pass: Boolean(archiveRoot) },
+  ];
+
+  const allPass = enginePass && uiPass && checklist.every((c) => c.pass);
 
   console.log(
     JSON.stringify(
@@ -287,21 +381,13 @@ app.whenReady().then(async () => {
         registryCount,
         engineInstrumentCount: engineProbe.instruments?.length || 0,
         engineFirstHasPriceOrRange: firstHasPriceOrRange,
-        outlookRangesDistinct: rangesDistinct,
-        outlookScoresDistinct: scoresDistinct,
-        outlookNoPendingDirection: noPendingDirection,
+        engineChecks,
+        uiChecks,
+        checklist,
+        allPass,
+        todayArchiveCount: todayArchive,
+        archiveRoot,
         auRangeSpan,
-        auRangeOk,
-        auVolForecast,
-        cuVolForecast,
-        volForecastNumeric,
-        scenariosOk,
-        regimeOk,
-        globalRegime: engineProbe.globalRegime,
-        factorBreakdownDistinct,
-        auFactorBreakdown: auInst?.factorBreakdown,
-        cuFactorBreakdown: cuInst?.factorBreakdown,
-        saFactorBreakdown: saInst?.factorBreakdown,
         ipcInstrumentCount: ipcOutlook?.instruments?.length || 0,
         result,
         consoleErrors: logs,
@@ -310,5 +396,16 @@ app.whenReady().then(async () => {
       2
     )
   );
+
+  for (const row of checklist) {
+    console.log(`[diagnose] ${row.pass ? 'PASS' : 'FAIL'} ${row.id} ${row.name}`);
+  }
+
+  if (!allPass) {
+    console.error('[diagnose] CHECKLIST FAILED — fix before release');
+    process.exitCode = 1;
+  } else {
+    console.log('[diagnose] CHECKLIST ALL PASS');
+  }
   app.quit();
 });

@@ -486,17 +486,48 @@ function formatOiDisplay(n) {
   return `${Math.round(n)}手`;
 }
 
+const OI_TICK_SNAPSHOT_MIN_MS = 90 * 1000;
+
 function updateOiSnapshot(commodityId, openInterest) {
   const key = `${OI_SNAP_PREFIX}${commodityId}.json`;
+  const dayKey = `${OI_SNAP_PREFIX}${commodityId}-day.json`;
   const prev = diskCache.readStale(key);
+  const daySnap = diskCache.readStale(dayKey);
   const prevOi = prev?.data?.openInterest;
+  const prevSavedAt = prev?.savedAt || prev?.data?.savedAt || 0;
   const oiValid = openInterest != null && !Number.isNaN(openInterest) && openInterest > 0;
+  const today = new Date().toISOString().slice(0, 10);
 
   if (oiValid) {
-    diskCache.write(key, { data: { openInterest, savedAt: Date.now() } });
+    if (!daySnap?.data?.day || daySnap.data.day !== today) {
+      diskCache.write(dayKey, { data: { openInterest, day: today, savedAt: Date.now() } });
+    }
+    const tickDelta =
+      prevOi > 0 ? Math.abs(openInterest - prevOi) / prevOi : 1;
+    const shouldWriteTick =
+      !prevOi ||
+      Date.now() - prevSavedAt >= OI_TICK_SNAPSHOT_MIN_MS ||
+      tickDelta >= 0.002;
+    if (shouldWriteTick) {
+      diskCache.write(key, { data: { openInterest, savedAt: Date.now() } });
+    }
   }
-  if (prevOi != null && oiValid && prevOi > 0) {
-    const deltaPct = ((openInterest - prevOi) / prevOi) * 100;
+
+  const dayOi = daySnap?.data?.day === today ? daySnap.data.openInterest : daySnap?.data?.openInterest;
+  const refOi = dayOi > 0 ? dayOi : prevOi;
+
+  if (refOi != null && oiValid && refOi > 0) {
+    const deltaPct = ((openInterest - refOi) / refOi) * 100;
+    if (Math.abs(deltaPct) < 0.04) {
+      return {
+        current: openInterest,
+        previous: refOi,
+        deltaPct: null,
+        display: formatOiDisplay(openInterest),
+        label: `持仓 ${formatOiDisplay(openInterest)}`,
+        score: 0,
+      };
+    }
     let label = '持仓平稳';
     if (deltaPct >= 3) label = '明显增仓';
     else if (deltaPct >= 1) label = '增仓';
@@ -504,7 +535,7 @@ function updateOiSnapshot(commodityId, openInterest) {
     else if (deltaPct <= -1) label = '减仓';
     return {
       current: openInterest,
-      previous: prevOi,
+      previous: refOi,
       deltaPct: +deltaPct.toFixed(3),
       display: formatOiDisplay(openInterest),
       label,
@@ -514,7 +545,7 @@ function updateOiSnapshot(commodityId, openInterest) {
   if (oiValid) {
     return {
       current: openInterest,
-      previous: prevOi ?? null,
+      previous: refOi ?? null,
       deltaPct: null,
       display: formatOiDisplay(openInterest),
       label: `持仓 ${formatOiDisplay(openInterest)}`,
@@ -523,7 +554,7 @@ function updateOiSnapshot(commodityId, openInterest) {
   }
   return {
     current: null,
-    previous: prevOi ?? null,
+    previous: refOi ?? null,
     deltaPct: null,
     display: null,
     label: '持仓待更新',

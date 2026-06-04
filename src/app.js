@@ -2890,10 +2890,15 @@ function renderOutlookPredictionBoxes(inst) {
   const stress = inst.scenarios?.stress;
   const volPm = inst.nextDayRangePct?.expectedMovePct ?? inst.nextDayRangePct?.halfWidth;
   const mid = base.mid != null ? formatOutlookPctSign(base.mid, 3) : '—';
+  const deltaMidHtml =
+    inst.changeDelta?.deltaMid != null
+      ? `<span class="outlook-pred-delta-mid">较上次 Δ${inst.changeDelta.deltaMid >= 0 ? '+' : ''}${Number(inst.changeDelta.deltaMid).toFixed(2)}%</span>`
+      : '';
   const smoothBox = `<div class="outlook-pred-box outlook-pred-smooth">
     <span class="outlook-pred-box-title">平滑预测</span>
     <span class="outlook-pred-box-range">${formatOutlookRangePct(base)}</span>
     <span class="outlook-pred-box-mid">中心 ${escapeHtml(mid)}</span>
+    ${deltaMidHtml}
     ${volPm != null ? `<span class="outlook-pred-box-vol">预测波动 ±${Number(volPm).toFixed(2)}%</span>` : ''}
   </div>`;
   const stressRange = stress ? formatOutlookRangePct(stress) : formatOutlookRangePct(base);
@@ -2945,7 +2950,7 @@ function renderOutlookAccuracyTable(inst) {
   const records = inst.accuracyRecords || [];
   const pending = inst.pendingPrediction;
   if (!records.length && !pending) {
-    return '<p class="outlook-accuracy-empty">暂无校验记录；实质变更存档后自动追踪预测 vs 实际</p>';
+    return '<p class="outlook-accuracy-empty">等待收盘校验：实质变更存档后将自动比对预测中心 vs 实际涨跌幅</p>';
   }
   const rows = records
     .slice(0, 5)
@@ -2963,7 +2968,7 @@ function renderOutlookAccuracyTable(inst) {
     })
     .join('');
   const pendingRow = pending
-    ? '<tr class="outlook-accuracy-pending"><td colspan="5">待验证（下一交易日）</td></tr>'
+    ? `<tr class="outlook-accuracy-pending"><td>${escapeHtml(pending.predictTs ? formatDate(pending.predictTs) : '—')}</td><td>${escapeHtml(formatOutlookPctSign(pending.predictedMid))}</td><td colspan="2">等待收盘校验</td><td>—</td></tr>`
     : '';
   return `<table class="outlook-accuracy-table">
     <thead><tr><th>预测时间</th><th>预测中心%</th><th>实际%</th><th>差距</th><th>方向</th></tr></thead>
@@ -3302,7 +3307,8 @@ function renderOutlookInstrumentRow(inst) {
         <span class="outlook-dir-label">${escapeHtml(inst.directionLabel || '震荡')}</span>
         <span class="outlook-stars" title="置信度（含波动稳定性）">${escapeHtml(inst.starsHtml || '')}</span>
         <span class="outlook-composite-score" title="综合分">${escapeHtml(inst.compositeScoreDisplay || (inst.compositeScore != null ? `${inst.compositeScore >= 0 ? '+' : ''}${Number(inst.compositeScore).toFixed(2)}` : ''))}</span>
-        ${inst.changeDelta?.deltaScore != null ? `<span class="outlook-delta-score" title="较上次综合分">${inst.changeDelta.deltaScore >= 0 ? '+' : ''}${Number(inst.changeDelta.deltaScore).toFixed(2)}</span>` : ''}
+        ${inst.changeDelta?.deltaScore != null ? `<span class="outlook-delta-score" title="较上次综合分">Δ分${inst.changeDelta.deltaScore >= 0 ? '+' : ''}${Number(inst.changeDelta.deltaScore).toFixed(2)}</span>` : ''}
+        ${inst.latencyLabel ? `<span class="outlook-latency-chip outlook-latency-${escapeAttr(inst.latencyState || 'sync')}" title="双速反射">${escapeHtml(inst.latencyLabel)}</span>` : ''}
       </div>
       <div class="outlook-inst-col outlook-inst-badges">${badges || '<span class="outlook-tech-badge outlook-badge-flat">待数据</span>'}</div>
       <span class="outlook-expand-icon" aria-hidden="true">${selected ? '▾' : '▸'}</span>
@@ -3607,7 +3613,7 @@ function renderOutlookPanel(source) {
         <h3 class="outlook-section-title">四大类 outlook 参考</h3>
         <div class="outlook-category-grid">${categoryCards}</div>
       </section>
-      <p class="policy-note outlook-note">v1.21.1 现价实时 · 预测双框 · 预测校验 · ${hitRateNote}${source.stats?.todayArchiveCount != null ? ` · 今日存档 ${source.stats.todayArchiveCount} 条` : ''} · 仅供参考</p>
+      <p class="policy-note outlook-note">v1.22.0 现价实时 · 预测双框 · 预测校验 · ${hitRateNote}${source.stats?.todayArchiveCount != null ? ` · 今日存档 ${source.stats.todayArchiveCount} 条` : ''} · 仅供参考</p>
     </div>
   </div>`;
 }

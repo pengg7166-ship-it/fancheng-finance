@@ -1688,6 +1688,41 @@
   border-radius: 6px;
   border: 1px solid rgba(148, 163, 184, 0.3);
   background: rgba(15, 23, 42, 0.6);
+  white-space: pre-line;
+}
+
+.outlook-pred-delta-mid {
+  display: block;
+  font-size: 13px;
+  color: #fcd34d;
+  margin-top: 2px;
+  font-variant-numeric: tabular-nums;
+}
+
+.outlook-latency-chip {
+  display: inline-block;
+  margin-top: 4px;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 2px 6px;
+  border-radius: 4px;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  color: #cbd5e1;
+}
+
+.outlook-latency-sync {
+  border-color: rgba(52, 211, 153, 0.45);
+  color: #6ee7b7;
+}
+
+.outlook-latency-lag {
+  border-color: rgba(251, 191, 36, 0.45);
+  color: #fcd34d;
+}
+
+.outlook-latency-diverge {
+  border-color: rgba(248, 113, 113, 0.45);
+  color: #fca5a5;
 }
 
 .outlook-accuracy-table {
