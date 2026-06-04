@@ -1,7 +1,7 @@
 {
   "name": "fancheng-finance",
   "productName": "姊垫緞閲戣瀺",
-  "version": "1.13.4",
+  "version": "1.13.5",
   "description": "鍏ㄧ悆鎸囨暟銆佸ぇ瀹楀晢鍝併€佺編鑱斿偍銆佹棩鏈ぎ琛屻€佺編鍥借储鏀块儴銆佹柊鍗庣ぞ瀹炴椂淇℃伅鑱氬悎妗岄潰搴旂敤",
   "main": "electron/main.js",
   "author": "",
@@ -52,7 +52,8 @@
     ],
     "win": {
       "target": "dir",
-      "executableName": "FanchengFinance"
+      "executableName": "FanchengFinance",
+      "signAndEditExecutable": false
     },
     "asar": true
   }

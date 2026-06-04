@@ -36,6 +36,10 @@ let geopoliticsPushTimer = null;
 let climatePushTimer = null;
 let centralBankPushTimer = null;
 const lastPushHashByChannel = {};
+const lastPushAtByChannel = {};
+const pendingPushByChannel = {};
+const pushFlushTimers = {};
+const MIN_PUSH_INTERVAL_MS = 2500;
 
 function hashLiveItemsPayload(data) {
   if (!data) return '';
@@ -56,8 +60,28 @@ function pushToRenderer(channel, data, hashFn) {
   if (mainWindow.webContents.isLoading()) return;
   const hash = hashFn(data);
   if (!hash || lastPushHashByChannel[channel] === hash) return;
-  lastPushHashByChannel[channel] = hash;
-  mainWindow.webContents.send(channel, data);
+
+  pendingPushByChannel[channel] = { data, hash };
+
+  const flush = () => {
+    const pending = pendingPushByChannel[channel];
+    if (!pending) return;
+    delete pendingPushByChannel[channel];
+    delete pushFlushTimers[channel];
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    if (lastPushHashByChannel[channel] === pending.hash) return;
+    lastPushHashByChannel[channel] = pending.hash;
+    lastPushAtByChannel[channel] = Date.now();
+    mainWindow.webContents.send(channel, pending.data);
+  };
+
+  const now = Date.now();
+  const elapsed = now - (lastPushAtByChannel[channel] || 0);
+  if (elapsed >= MIN_PUSH_INTERVAL_MS && !pushFlushTimers[channel]) {
+    flush();
+  } else if (!pushFlushTimers[channel]) {
+    pushFlushTimers[channel] = setTimeout(flush, Math.max(50, MIN_PUSH_INTERVAL_MS - elapsed));
+  }
 }
 
 function bootstrapUserDataPath() {
@@ -72,8 +96,8 @@ bootstrapUserDataPath();
 
 function getForexRefreshMs() {
   const seconds = config.readConfig().forexRefreshSeconds;
-  const resolved = Number.isFinite(seconds) ? seconds : 10;
-  return Math.max(5, Math.min(60, resolved)) * 1000;
+  const resolved = Number.isFinite(seconds) ? seconds : 15;
+  return Math.max(15, Math.min(60, resolved)) * 1000;
 }
 
 function pushForexLiveToRenderer(data) {
@@ -111,14 +135,14 @@ function makePushTick(fetchFn, refreshFn, pushFn) {
 function startForexPushLoop() {
   if (forexPushTimer) clearInterval(forexPushTimer);
   const tick = makePushTick(fetchForexLive, refreshForexLiveInBackground, pushForexLiveToRenderer);
-  setTimeout(tick, 2500);
-  forexPushTimer = setInterval(tick, getForexRefreshMs());
+  setTimeout(tick, 5000);
+  forexPushTimer = setInterval(tick, getForexRefreshMs() + 5000);
 }
 
 function getPolicyRefreshMs() {
   const seconds = config.readConfig().policyRefreshSeconds;
-  const resolved = Number.isFinite(seconds) ? seconds : 30;
-  return Math.max(15, Math.min(300, resolved)) * 1000;
+  const resolved = Number.isFinite(seconds) ? seconds : 45;
+  return Math.max(30, Math.min(300, resolved)) * 1000;
 }
 
 function pushPolicyLiveToRenderer(data) {
@@ -138,8 +162,8 @@ function startGeopoliticsPushLoop() {
     refreshGeopoliticsInBackground,
     pushGeopoliticsLiveToRenderer
   );
-  setTimeout(tick, 12000);
-  geopoliticsPushTimer = setInterval(tick, getPolicyRefreshMs() + 5000);
+  setTimeout(tick, 15000);
+  geopoliticsPushTimer = setInterval(tick, getPolicyRefreshMs() + 15000);
 }
 
 function pushClimateLiveToRenderer(data) {
@@ -150,15 +174,15 @@ function pushClimateLiveToRenderer(data) {
 function startClimatePushLoop() {
   if (climatePushTimer) clearInterval(climatePushTimer);
   const tick = makePushTick(fetchClimateLive, refreshClimateInBackground, pushClimateLiveToRenderer);
-  setTimeout(tick, 18000);
-  climatePushTimer = setInterval(tick, getPolicyRefreshMs() + 10000);
+  setTimeout(tick, 22000);
+  climatePushTimer = setInterval(tick, getPolicyRefreshMs() + 20000);
 }
 
 function startPolicyPushLoop() {
   if (policyPushTimer) clearInterval(policyPushTimer);
   const tick = makePushTick(fetchPolicyLive, refreshPolicyLiveInBackground, pushPolicyLiveToRenderer);
-  setTimeout(tick, 7000);
-  policyPushTimer = setInterval(tick, getPolicyRefreshMs());
+  setTimeout(tick, 10000);
+  policyPushTimer = setInterval(tick, getPolicyRefreshMs() + 5000);
 }
 
 function getCentralBankRefreshMs() {
@@ -211,8 +235,8 @@ function startCentralBankPushLoop() {
       busy = false;
     }
   };
-  setTimeout(tick, 5000);
-  centralBankPushTimer = setInterval(tick, getCentralBankRefreshMs() + 3000);
+  setTimeout(tick, 8000);
+  centralBankPushTimer = setInterval(tick, getCentralBankRefreshMs() + 8000);
 }
 
 function createWindow() {
@@ -261,8 +285,8 @@ app.whenReady().then(() => {
     startClimatePushLoop();
     startCentralBankPushLoop();
   }, 3000);
-  setTimeout(() => prefetchAfterStartup(), 8000);
-  setInterval(() => flushAllCaches(), 2 * 60 * 1000);
+  setTimeout(() => prefetchAfterStartup(), 12000);
+  setInterval(() => flushAllCaches(), 5 * 60 * 1000);
 });
 
 app.on('before-quit', () => {

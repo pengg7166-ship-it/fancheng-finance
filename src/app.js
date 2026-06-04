@@ -81,16 +81,28 @@ let isLiveRefreshing = false;
 let panelsInitialized = false;
 let pendingRenderData = null;
 let renderAllScheduled = false;
+let rafWorkQueue = [];
+let rafWorkScheduled = false;
+const CHUNK_DOM_SIZE = 20;
 
 const FRED_APPLY_URL = 'https://fredaccount.stlouisfed.org/apikeys';
 const STOOQ_APPLY_URL = 'https://stooq.pl/q/d/?s=^dax&get_apikey';
 
 function debounce(fn, ms) {
   let timer = null;
-  return (...args) => {
+  const wrapped = (...args) => {
     clearTimeout(timer);
     timer = setTimeout(() => fn(...args), ms);
   };
+  wrapped.cancel = () => {
+    clearTimeout(timer);
+    timer = null;
+  };
+  return wrapped;
+}
+
+function hashListInputs(parts) {
+  return parts.map((p) => (typeof p === 'string' ? p : JSON.stringify(p))).join('|');
 }
 
 function limitDisplayItems(items, limit) {
@@ -98,12 +110,88 @@ function limitDisplayItems(items, limit) {
   return items.slice(0, limit);
 }
 
-function scheduleIdleWork(fn, timeoutMs = 400) {
-  if (typeof requestIdleCallback === 'function') {
-    requestIdleCallback(fn, { timeout: timeoutMs });
-  } else {
-    setTimeout(fn, 0);
+function isActivePanel(key) {
+  return activeTab === key;
+}
+
+function updateNavTabBadge(key, count) {
+  const tab = document.querySelector(`.tab[data-tab="${key}"]`);
+  if (!tab) return;
+  if (!count) {
+    tab.removeAttribute('data-live-count');
+    return;
   }
+  tab.dataset.liveCount = count > 99 ? '99+' : String(count);
+}
+
+function cancelPendingPanelRenders() {
+  refreshPolicyPanelSectionsDebounced.cancel?.();
+  refreshGeopoliticsPanelSectionsDebounced.cancel?.();
+  refreshClimatePanelSectionsDebounced.cancel?.();
+  pendingRenderData = null;
+  renderAllScheduled = false;
+  rafWorkQueue.length = 0;
+}
+
+function processRafQueue() {
+  rafWorkScheduled = false;
+  const batch = rafWorkQueue.splice(0, 2);
+  for (const fn of batch) {
+    try {
+      fn();
+    } catch {
+      // ignore
+    }
+  }
+  if (rafWorkQueue.length) {
+    rafWorkScheduled = true;
+    requestAnimationFrame(processRafQueue);
+  }
+}
+
+function scheduleRafWork(fn) {
+  if (fn) rafWorkQueue.push(fn);
+  if (rafWorkScheduled) return;
+  rafWorkScheduled = true;
+  requestAnimationFrame(processRafQueue);
+}
+
+function scheduleIdleWork(fn) {
+  scheduleRafWork(fn);
+}
+
+function setListHtmlBatched(container, rowHtmlStrings, wrapperClass, moreHint = '') {
+  if (!container) return;
+  const hash = hashListInputs([wrapperClass, rowHtmlStrings.length, rowHtmlStrings[0], rowHtmlStrings.at(-1)]);
+  if (container.dataset.listHash === hash) return;
+  container.dataset.listHash = hash;
+  container.innerHTML = '';
+  const wrapper = document.createElement('div');
+  wrapper.className = wrapperClass;
+  container.appendChild(wrapper);
+  if (!rowHtmlStrings.length) {
+    if (moreHint) container.insertAdjacentHTML('beforeend', moreHint);
+    return;
+  }
+  if (rowHtmlStrings.length <= CHUNK_DOM_SIZE) {
+    wrapper.innerHTML = rowHtmlStrings.join('');
+    if (moreHint) container.insertAdjacentHTML('beforeend', moreHint);
+    return;
+  }
+  let i = 0;
+  const appendChunk = () => {
+    const end = Math.min(i + CHUNK_DOM_SIZE, rowHtmlStrings.length);
+    const frag = document.createDocumentFragment();
+    const tmp = document.createElement('div');
+    for (; i < end; i++) {
+      tmp.innerHTML = rowHtmlStrings[i];
+      if (tmp.firstElementChild) frag.appendChild(tmp.firstElementChild);
+    }
+    wrapper.appendChild(frag);
+    if (i < rowHtmlStrings.length) requestAnimationFrame(appendChunk);
+    else if (moreHint) container.insertAdjacentHTML('beforeend', moreHint);
+  };
+  requestAnimationFrame(appendChunk);
 }
 
 /** 日本央行新闻中文化（内嵌于 app.js，确保打包后一定生效） */
@@ -1586,7 +1674,7 @@ function renderPolicyFeedZone(source) {
 }
 
 function refreshPolicyPanelSections(panel, source) {
-  if (!panel || !source) return;
+  if (!panel || !source || !isActivePanel('policy')) return;
   const fullSource = {
     ...source,
     items: source.items || window.__policyCacheItems || [],
@@ -1612,11 +1700,27 @@ function refreshPolicyPanelSections(panel, source) {
     feedHead.outerHTML = renderPolicyFeedDivider(fullSource);
   }
   if (scroll) {
-    const listItems = limitDisplayItems(getFilteredPolicyItemsForView(fullSource.items), POLICY_DISPLAY_LIMIT);
-    scroll.innerHTML =
-      policyViewMode === 'commodity'
-        ? '<div class="policy-commodity-view-hint">大宗关联政策见上方专区，可按品种筛选</div>'
-        : renderPolicyReadingList(listItems);
+    if (policyViewMode === 'commodity') {
+      const hint =
+        '<div class="policy-commodity-view-hint">大宗关联政策见上方专区，可按品种筛选</div>';
+      if (scroll.dataset.listHash !== 'commodity') {
+        scroll.innerHTML = hint;
+        scroll.dataset.listHash = 'commodity';
+      }
+    } else {
+      const listItems = limitDisplayItems(getFilteredPolicyItemsForView(fullSource.items), POLICY_DISPLAY_LIMIT);
+      const rows = listItems.map((item, i) => renderPolicyReadingCard(item, i + 1));
+      const moreHint =
+        fullSource.items.length > listItems.length
+          ? `<p class="policy-note">已展示 ${listItems.length} / ${fullSource.items.length} 条，请使用筛选缩小范围</p>`
+          : '';
+      if (!rows.length) {
+        scroll.innerHTML = '<div class="empty-state policy-feed-empty">当前筛选条件下暂无政策</div>';
+        scroll.dataset.listHash = 'empty';
+      } else {
+        setListHtmlBatched(scroll, rows, 'policy-reading-list', moreHint);
+      }
+    }
     scroll.classList.toggle('policy-reading-scroll-hidden', policyViewMode === 'commodity');
   }
   panel.querySelector('#policy-commodity-zone')?.classList.toggle(
@@ -1626,9 +1730,10 @@ function refreshPolicyPanelSections(panel, source) {
   panel.querySelectorAll('.policy-view-tab').forEach((b) =>
     b.classList.toggle('active', b.dataset.view === policyViewMode)
   );
+  updateNavTabBadge('policy', null);
 }
 
-const refreshPolicyPanelSectionsDebounced = debounce(refreshPolicyPanelSections, 280);
+const refreshPolicyPanelSectionsDebounced = debounce(refreshPolicyPanelSections, 350);
 
 function renderPolicyFeedDivider(source) {
   if (policyViewMode === 'commodity') return '';
@@ -2072,7 +2177,7 @@ function renderGeopoliticsPanel(source) {
 }
 
 function refreshGeopoliticsPanelSections(panel, source) {
-  if (!panel) return;
+  if (!panel || !isActivePanel('geopolitics')) return;
   const data = source || {
     items: window.__geoCacheItems || [],
     stats: window.__geoCacheStats,
@@ -2107,12 +2212,32 @@ function refreshGeopoliticsPanelSections(panel, source) {
       if (starDiff !== 0) return starDiff;
       return new Date(b.pubDate || 0) - new Date(a.pubDate || 0);
     });
-    scroll.innerHTML =
-      geoViewMode === 'catalog' ? renderGeopoliticsCountryCatalog(data) : renderGeopoliticsReadingList(filtered);
+    if (geoViewMode === 'catalog') {
+      const catalogHtml = renderGeopoliticsCountryCatalog(data);
+      const hash = hashListInputs(['catalog', geoFilterRegion, geoFilterCountry, catalogHtml.length]);
+      if (scroll.dataset.listHash !== hash) {
+        scroll.innerHTML = catalogHtml;
+        scroll.dataset.listHash = hash;
+      }
+    } else {
+      const limited = limitDisplayItems(filtered, GEO_DISPLAY_LIMIT);
+      const rows = limited.map((item, i) => renderGeopoliticsReadingCard(item, i + 1));
+      const moreHint =
+        filtered.length > limited.length
+          ? `<p class="policy-note geo-note">已展示 ${limited.length} / ${filtered.length} 条，请使用筛选缩小范围</p>`
+          : '';
+      if (!rows.length) {
+        scroll.innerHTML = '<div class="empty-state policy-feed-empty">当前筛选条件下暂无地缘动态</div>';
+        scroll.dataset.listHash = 'empty';
+      } else {
+        setListHtmlBatched(scroll, rows, 'policy-reading-list geo-reading-list', moreHint);
+      }
+    }
   }
+  updateNavTabBadge('geopolitics', null);
 }
 
-const refreshGeopoliticsPanelSectionsDebounced = debounce(refreshGeopoliticsPanelSections, 280);
+const refreshGeopoliticsPanelSectionsDebounced = debounce(refreshGeopoliticsPanelSections, 350);
 
 function filterBaseClimateItems(items) {
   let list = items || [];
@@ -2322,7 +2447,7 @@ function renderClimatePanel(source) {
 }
 
 function refreshClimatePanelSections(panel, source) {
-  if (!panel) return;
+  if (!panel || !isActivePanel('climate')) return;
   const data = source || {
     items: window.__climateCacheItems || [],
     stats: window.__climateCacheStats,
@@ -2353,11 +2478,23 @@ function refreshClimatePanelSections(panel, source) {
       if (starDiff !== 0) return starDiff;
       return new Date(b.pubDate || 0) - new Date(a.pubDate || 0);
     });
-    scroll.innerHTML = renderClimateReadingList(filtered);
+    const limited = limitDisplayItems(filtered, CLIMATE_DISPLAY_LIMIT);
+    const rows = limited.map((item, i) => renderClimateReadingCard(item, i + 1));
+    const moreHint =
+      filtered.length > limited.length
+        ? `<p class="policy-note climate-note">已展示 ${limited.length} / ${filtered.length} 条，请使用筛选缩小范围</p>`
+        : '';
+    if (!rows.length) {
+      scroll.innerHTML = '<div class="empty-state policy-feed-empty">当前筛选条件下暂无气候动态</div>';
+      scroll.dataset.listHash = 'empty';
+    } else {
+      setListHtmlBatched(scroll, rows, 'policy-reading-list climate-reading-list', moreHint);
+    }
   }
+  updateNavTabBadge('climate', null);
 }
 
-const refreshClimatePanelSectionsDebounced = debounce(refreshClimatePanelSections, 320);
+const refreshClimatePanelSectionsDebounced = debounce(refreshClimatePanelSections, 380);
 
 function renderPolicyPanel(source) {
   const hasData = source.items?.length;
@@ -2623,72 +2760,99 @@ function applyIncrementalDataUpdate(data, { fromCache = false } = {}) {
   const sources = data?.sources;
   if (!sources) return;
 
+  if (sources.policy?.items?.length) cachePolicySource(sources.policy);
+  if (sources.geopolitics?.items?.length) {
+    cacheGeopoliticsSource(sources.geopolitics);
+    patchPolicyCommodityIntelFromGeo(sources.geopolitics);
+  }
+  if (sources.climate?.items?.length) {
+    cacheClimateSource(sources.climate);
+    patchPolicyCommodityIntelFromClimate(sources.climate);
+  }
+
+  if (!isActivePanel('policy') && sources.policy?.items?.length) {
+    updateNavTabBadge('policy', sources.policy.items.length);
+  }
+  if (!isActivePanel('geopolitics') && sources.geopolitics?.items?.length) {
+    updateNavTabBadge('geopolitics', sources.geopolitics.items.length);
+  }
+  if (!isActivePanel('climate') && sources.climate?.items?.length) {
+    updateNavTabBadge('climate', sources.climate.items.length);
+  }
+
   if (hasIndexData(data)) {
-    const panel = document.getElementById('panel-indices');
-    if (panel?.querySelector('.index-grid')) {
-      updateIndicesCards(sources.indices);
-    } else if (panel) {
-      replaceSinglePanel('indices', sources.indices);
+    if (isActivePanel('indices')) {
+      const panel = document.getElementById('panel-indices');
+      if (panel?.querySelector('.index-grid')) {
+        updateIndicesCards(sources.indices);
+      } else if (panel) {
+        replaceSinglePanel('indices', sources.indices);
+      }
+    } else {
+      const count = sources.indices?.regions?.reduce((n, r) => n + (r.indices?.length || 0), 0);
+      if (count) updateNavTabBadge('indices', count);
     }
   }
 
   if (sources.macro?.groups) {
-    const panel = document.getElementById('panel-macro');
-    if (panel?.querySelector('.macro-groups')) updateMacroPanel(sources.macro);
-    else if (panel) replaceSinglePanel('macro', sources.macro);
+    if (isActivePanel('macro')) {
+      const panel = document.getElementById('panel-macro');
+      if (panel?.querySelector('.macro-groups')) updateMacroPanel(sources.macro);
+      else if (panel) replaceSinglePanel('macro', sources.macro);
+    }
   }
 
   if (sources.forex?.pairs?.length) {
-    const panel = document.getElementById('panel-forex');
-    if (panel?.querySelector('.forex-groups')) applyForexLiveData(sources.forex);
-    else if (panel) replaceSinglePanel('forex', sources.forex);
+    if (isActivePanel('forex')) {
+      const panel = document.getElementById('panel-forex');
+      if (panel?.querySelector('.forex-groups')) applyForexLiveData(sources.forex);
+      else if (panel) replaceSinglePanel('forex', sources.forex);
+    }
   }
 
-  if (sources.policy?.items?.length) {
-    cachePolicySource(sources.policy);
+  if (sources.policy?.items?.length && isActivePanel('policy')) {
     const panel = document.getElementById('panel-policy');
     if (panel?.querySelector('.policy-reading-v2')) {
       refreshPolicyPanelSectionsDebounced(panel, sources.policy);
     }
   }
 
-  if (sources.geopolitics?.items?.length) {
-    cacheGeopoliticsSource(sources.geopolitics);
-    patchPolicyCommodityIntelFromGeo(sources.geopolitics);
+  if (sources.geopolitics?.items?.length && isActivePanel('geopolitics')) {
     const panel = document.getElementById('panel-geopolitics');
     if (panel?.querySelector('.geo-reading-scroll')) {
       refreshGeopoliticsPanelSectionsDebounced(panel, sources.geopolitics);
     }
   }
 
-  if (sources.climate?.items?.length) {
-    cacheClimateSource(sources.climate);
-    patchPolicyCommodityIntelFromClimate(sources.climate);
+  if (sources.climate?.items?.length && isActivePanel('climate')) {
     const panel = document.getElementById('panel-climate');
     if (panel?.querySelector('.climate-reading-scroll')) {
       refreshClimatePanelSectionsDebounced(panel, sources.climate);
     }
   }
 
-  if (sources.fed && hasCentralBankLivePayload(sources.fed)) {
+  if (sources.fed && hasCentralBankLivePayload(sources.fed) && isActivePanel('fed')) {
     const panel = document.getElementById('panel-fed');
     if (panel?.querySelector('.cb-reading-v2')) applyFedLiveData(sources.fed);
   }
 
-  if (sources.boj && hasCentralBankLivePayload(sources.boj)) {
+  if (sources.boj && hasCentralBankLivePayload(sources.boj) && isActivePanel('boj')) {
     const localized = localizeBojSource(sources.boj);
     const panel = document.getElementById('panel-boj');
     if (panel?.querySelector('.cb-reading-v2')) applyBojLiveData(localized);
   }
 
-  for (const key of ['treasury', 'xinhua']) {
-    const src = sources[key];
-    if (!src?.news?.length && !src?.indicators?.length) continue;
-    const panel = document.getElementById(`panel-${key}`);
-    if (panel && panel.querySelector('.section')) replaceSinglePanel(key, src);
+  if (isActivePanel('treasury') || isActivePanel('xinhua')) {
+    for (const key of ['treasury', 'xinhua']) {
+      if (!isActivePanel(key)) continue;
+      const src = sources[key];
+      if (!src?.news?.length && !src?.indicators?.length) continue;
+      const panel = document.getElementById(`panel-${key}`);
+      if (panel && panel.querySelector('.section')) replaceSinglePanel(key, src);
+    }
   }
 
-  if (activeTab === 'policy' && policyViewMode === 'commodity') {
+  if (isActivePanel('policy') && policyViewMode === 'commodity') {
     const policyPanel = document.getElementById('panel-policy');
     if (policyPanel) {
       refreshPolicyPanelSectionsDebounced(policyPanel, {
@@ -2755,12 +2919,12 @@ function renderAll(data) {
   pendingRenderData = data;
   if (renderAllScheduled) return;
   renderAllScheduled = true;
-  scheduleIdleWork(() => {
+  scheduleRafWork(() => {
     renderAllScheduled = false;
     const payload = pendingRenderData;
     pendingRenderData = null;
     if (payload) executeRenderAll(payload);
-  }, 600);
+  });
 }
 
 function setupIndexCards() {
@@ -3086,7 +3250,7 @@ function applyStartupData(data, { fromCache = false, forceFullRender = false } =
   }
 
   if (panelsInitialized && !forceFullRender) {
-    scheduleIdleWork(() => applyIncrementalDataUpdate(data, { fromCache }), 300);
+    scheduleRafWork(() => applyIncrementalDataUpdate(data, { fromCache }));
   } else {
     renderAll(data);
   }
@@ -3145,7 +3309,7 @@ async function loadData(silent = false, { force = false } = {}) {
 }
 
 function applyForexLiveData(forex) {
-  if (!forex?.pairs?.length) return;
+  if (!forex?.pairs?.length || !isActivePanel('forex')) return;
   const panel = document.getElementById('panel-forex');
   if (!panel) return;
 
@@ -3211,7 +3375,7 @@ function startPolicyLiveTimer() {
 
 function applyPolicyLiveData(source) {
   const panel = document.getElementById('panel-policy');
-  if (!panel || !source?.items?.length) return;
+  if (!panel || !source?.items?.length || !isActivePanel('policy')) return;
 
   const prevIds = window.__policyKnownIds || new Set();
   const newIds = new Set();
@@ -3413,7 +3577,6 @@ function startGeopoliticsLiveTimer() {
 }
 
 function applyGeopoliticsLiveData(source) {
-  const panel = document.getElementById('panel-geopolitics');
   if (!source?.items?.length) return;
 
   window.__geoCacheItems = source.items;
@@ -3423,6 +3586,12 @@ function applyGeopoliticsLiveData(source) {
   window.__geoCacheFramework = source.framework;
   patchPolicyCommodityIntelFromGeo(source);
 
+  if (!isActivePanel('geopolitics')) {
+    updateNavTabBadge('geopolitics', source.items.length);
+    return;
+  }
+
+  const panel = document.getElementById('panel-geopolitics');
   if (panel) refreshGeopoliticsPanelSectionsDebounced(panel, source);
 
   const stamp = source.liveRefreshedAt || source.updatedAt;
@@ -3431,11 +3600,11 @@ function applyGeopoliticsLiveData(source) {
     liveTag.innerHTML = `<span class="policy-live-dot"></span>实时 ${formatDate(stamp)}`;
   }
 
-  if (activeTab === 'geopolitics' && stamp) {
+  if (stamp) {
     $('#lastUpdated').textContent = `地缘实时 ${formatDate(stamp)}`;
   }
 
-  if (activeTab === 'policy' && policyViewMode === 'commodity') {
+  if (isActivePanel('policy') && policyViewMode === 'commodity') {
     const policyPanel = document.getElementById('panel-policy');
     if (policyPanel) {
       refreshPolicyPanelSectionsDebounced(policyPanel, {
@@ -3546,7 +3715,6 @@ function startClimateLiveTimer() {
 }
 
 function applyClimateLiveData(source) {
-  const panel = document.getElementById('panel-climate');
   if (!source?.items?.length) return;
 
   window.__climateCacheItems = source.items;
@@ -3554,6 +3722,12 @@ function applyClimateLiveData(source) {
   window.__climateCacheFramework = source.framework;
   patchPolicyCommodityIntelFromClimate(source);
 
+  if (!isActivePanel('climate')) {
+    updateNavTabBadge('climate', source.items.length);
+    return;
+  }
+
+  const panel = document.getElementById('panel-climate');
   if (panel) refreshClimatePanelSectionsDebounced(panel, source);
 
   const stamp = source.liveRefreshedAt || source.updatedAt;
@@ -3562,11 +3736,11 @@ function applyClimateLiveData(source) {
     liveTag.innerHTML = `<span class="policy-live-dot"></span>实时 ${formatDate(stamp)}`;
   }
 
-  if (activeTab === 'climate' && stamp) {
+  if (stamp) {
     $('#lastUpdated').textContent = `气候实时 ${formatDate(stamp)}`;
   }
 
-  if (activeTab === 'policy' && policyViewMode === 'commodity') {
+  if (isActivePanel('policy') && policyViewMode === 'commodity') {
     const policyPanel = document.getElementById('panel-policy');
     if (policyPanel) {
       refreshPolicyPanelSectionsDebounced(policyPanel, {
@@ -3662,12 +3836,15 @@ function startAutoRefresh() {
   if (liveRefreshTimer) clearInterval(liveRefreshTimer);
 
   refreshTimer = setInterval(() => loadData(true), refreshIntervalMs);
-  liveRefreshTimer = setInterval(refreshLive, quoteRefreshMs);
+  liveRefreshTimer = setInterval(refreshLive, Math.max(quoteRefreshMs, 45000));
   // 政策/地缘/气候/外汇/央行实时推送由主进程 push loop + on*Live 处理，避免重复 IPC 拉取
 }
 
 function switchTab(key) {
+  if (key === activeTab) return;
+  cancelPendingPanelRenders();
   activeTab = key;
+  updateNavTabBadge(key, null);
   $$('.tab').forEach((t) => t.classList.toggle('active', t.dataset.tab === key));
   let panel = document.getElementById(`panel-${key}`);
   if (!panel && key !== 'indices') {
@@ -3696,12 +3873,6 @@ function switchTab(key) {
   $('#liveBadge')?.classList.toggle('hidden', !showLive);
   if (key === 'commodities') window.CommoditiesUI.onTabActivated();
   if (key === 'macro') refreshMacroLive();
-  stopForexLiveTimer();
-  stopPolicyLiveTimer();
-  stopGeopoliticsLiveTimer();
-  stopClimateLiveTimer();
-  stopFedLiveTimer();
-  stopBojLiveTimer();
   if (key === 'policy') {
     initPolicyCommodityPanel().then(() => {
       const panel = document.getElementById('panel-policy');
@@ -3797,6 +3968,7 @@ function startFedLiveTimer() {
 }
 
 function applyCentralBankPanelData(key, source) {
+  if (!isActivePanel(key)) return;
   const panel = document.getElementById(`panel-${key}`);
   if (!panel) return;
 
@@ -4190,7 +4362,7 @@ async function bootstrapApp() {
   try {
     const cfg = await withTimeout(window.fancheng.getConfig(), 5000, {});
     refreshIntervalMs = ((cfg.refreshIntervalMinutes || 5) * 60 * 1000);
-    quoteRefreshMs = ((cfg.quoteRefreshSeconds || 30) * 1000);
+    quoteRefreshMs = Math.max((cfg.quoteRefreshSeconds || 30) * 1000, 45000);
     forexRefreshMs = ((cfg.forexRefreshSeconds || 10) * 1000);
     policyRefreshMs = ((cfg.policyRefreshSeconds || 30) * 1000);
     fedRefreshMs = policyRefreshMs;
@@ -4230,73 +4402,43 @@ async function bootstrapApp() {
         if (!policy?.items?.length) return;
         window.__policyCacheItems = policy.items;
         if (policy.commodityIntel) window.__policyCommodityIntel = policy.commodityIntel;
-        if (activeTab === 'policy') applyPolicyLiveData(policy);
+        if (isActivePanel('policy')) applyPolicyLiveData(policy);
+        else updateNavTabBadge('policy', policy.items.length);
       });
     }
 
     if (window.fancheng.onGeopoliticsLive) {
       window.fancheng.onGeopoliticsLive((geo) => {
         if (!geo?.items?.length) return;
-        window.__geoCacheItems = geo.items;
-        window.__geoCacheStats = geo.stats;
-        window.__geoCacheCatalog = geo.catalog;
-        window.__geoCacheFramework = geo.framework;
-        patchPolicyCommodityIntelFromGeo(geo);
-        if (activeTab === 'geopolitics') applyGeopoliticsLiveData(geo);
-        else if (activeTab === 'policy' && policyViewMode === 'commodity') {
-          const policyPanel = document.getElementById('panel-policy');
-          if (policyPanel) {
-            refreshPolicyPanelSectionsDebounced(policyPanel, {
-              items: window.__policyCacheItems || [],
-              groups: window.__policyCacheGroups || [],
-              stats: window.__policyCacheStats,
-              commodityIntel: window.__policyCommodityIntel,
-            });
-          }
-        }
+        applyGeopoliticsLiveData(geo);
       });
     }
 
     if (window.fancheng.onClimateLive) {
       window.fancheng.onClimateLive((climate) => {
         if (!climate?.items?.length) return;
-        window.__climateCacheItems = climate.items;
-        window.__climateCacheStats = climate.stats;
-        window.__climateCacheFramework = climate.framework;
-        patchPolicyCommodityIntelFromClimate(climate);
-        if (activeTab === 'climate') applyClimateLiveData(climate);
-        else if (activeTab === 'policy' && policyViewMode === 'commodity') {
-          const policyPanel = document.getElementById('panel-policy');
-          if (policyPanel) {
-            refreshPolicyPanelSectionsDebounced(policyPanel, {
-              items: window.__policyCacheItems || [],
-              groups: window.__policyCacheGroups || [],
-              stats: window.__policyCacheStats,
-              commodityIntel: window.__policyCommodityIntel,
-            });
-          }
-        }
+        applyClimateLiveData(climate);
       });
     }
 
     if (window.fancheng.onFedLive) {
       window.fancheng.onFedLive((fed) => {
         if (!hasCentralBankLivePayload(fed)) return;
-        if (activeTab === 'fed') applyFedLiveData(fed);
+        if (isActivePanel('fed')) applyFedLiveData(fed);
       });
     }
 
     if (window.fancheng.onBojLive) {
       window.fancheng.onBojLive((boj) => {
         if (!hasCentralBankLivePayload(boj)) return;
-        if (activeTab === 'boj') applyBojLiveData(boj);
+        if (isActivePanel('boj')) applyBojLiveData(boj);
       });
     }
 
     if (window.fancheng.onForexLive) {
       window.fancheng.onForexLive((forex) => {
         if (!forex?.pairs?.length) return;
-        if (activeTab === 'forex') applyForexLiveData(forex);
+        if (isActivePanel('forex')) applyForexLiveData(forex);
       });
     }
 
