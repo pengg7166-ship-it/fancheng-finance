@@ -7,6 +7,7 @@ if exist "dist-build\win-unpacked\FanchengFinance.exe" set "DIR=%~dp0dist-build\
 if not defined DIR if exist "dist-new\win-unpacked\FanchengFinance.exe" set "DIR=%~dp0dist-new\win-unpacked"
 if not defined DIR if exist "dist-build\win-unpacked\梵澄金融.exe" set "DIR=%~dp0dist-build\win-unpacked"
 if not defined DIR if exist "dist-new\win-unpacked\梵澄金融.exe" set "DIR=%~dp0dist-new\win-unpacked"
+if not defined DIR if exist "E:\FanchengFinance\app\win-unpacked\FanchengFinance.exe" set "DIR=E:\FanchengFinance\app\win-unpacked"
 if not defined DIR if exist "dist\win-unpacked\梵澄金融.exe" set "DIR=%~dp0dist\win-unpacked"
 
 if not defined DIR (
@@ -15,9 +16,14 @@ if not defined DIR (
   exit /b 1
 )
 
-cd /d "%DIR%"
-if exist "FanchengFinance.exe" (
-  start "" "FanchengFinance.exe"
-) else (
-  start "" "梵澄金融.exe"
+if exist "%DIR%\FanchengFinance.exe" (
+  start "" "%DIR%\FanchengFinance.exe"
+  exit /b 0
 )
+if exist "%DIR%\梵澄金融.exe" (
+  start "" "%DIR%\梵澄金融.exe"
+  exit /b 0
+)
+echo 目录中未找到可执行文件
+pause
+exit /b 1

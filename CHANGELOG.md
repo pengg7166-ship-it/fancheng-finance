@@ -1,5 +1,16 @@
 # 更新日志
 
+## v1.13.3 — 2026-06-04
+
+### 修复：xml2js 缺失与 Windows 批处理启动
+
+- **根因 1**：app.asar 未包含完整 node_modules，缺少 xml2js，RSS 解析失败导致白屏
+- **根因 2**：部分 .bat 在 EXE 未找到时执行 `start ""` 触发 Windows 报错
+- **修复**：electron-builder 打包并 robocopy 至 E:\FanchengFinance\app\win-unpacked；启动前校验 EXE
+- 页脚版本为 **v1.13.3**（延续 v1.13.2 白屏/未响应修复）
+
+---
+
 ## v1.13.2 — 2026-06-04
 
 ### 修复：Windows「未响应」/ 界面卡顿

@@ -15,7 +15,7 @@ echo   不要勾选 README / .gitignore / license
 echo   中文界面点绿色按钮「创建存储库」（英文为 Create repository）
 echo   若提示「此账户中已存在 fancheng-finance」说明仓库已有，直接按回车跳过本步
 echo.
-start "" "https://github.com/new?name=fancheng-finance"
+rundll32 url.dll,FileProtocolHandler "https://github.com/new?name=fancheng-finance"
 echo.
 echo 按回车表示已在 GitHub 创建好空仓库（或仓库本来就存在）
 pause

@@ -1,7 +1,6 @@
 @echo off
 chcp 65001 >nul
-title 梵澄金融 - 更新并启动
-cd /d "%~dp0"
+title 梵澄金融 - 更新并启�?cd /d "%~dp0"
 
 for /f "delims=" %%V in ('node -p "require('./package.json').version"') do set "APPVER=%%V"
 
@@ -15,7 +14,7 @@ set "ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/"
 set "ELECTRON_BUILDER_BINARIES_MIRROR=https://npmmirror.com/mirrors/electron-builder-binaries/"
 set "CSC_IDENTITY_AUTO_DISCOVERY=false"
 
-echo [1/3] 正在打包最新版本...
+echo [1/3] 正在打包最新版�?..
 taskkill /F /IM "FanchengFinance.exe" >nul 2>&1
 taskkill /F /IM "梵澄金融.exe" >nul 2>&1
 timeout /t 2 /nobreak >nul
@@ -27,7 +26,7 @@ if errorlevel 1 (
 )
 
 echo.
-echo [2/4] 同步到 dist-out（快捷方式目标）...
+echo [2/4] 同步�?dist-out（快捷方式目标）...
 node scripts/sync-dist-out.js
 if errorlevel 1 (
   echo 同步失败，请完全退出梵澄金融后重试
@@ -44,6 +43,11 @@ echo [4/4] 启动应用...
 set "EXE="
 if exist "%~dp0dist-build\win-unpacked\FanchengFinance.exe" set "EXE=%~dp0dist-build\win-unpacked\FanchengFinance.exe"
 if not defined EXE if exist "%~dp0dist-build\win-unpacked\梵澄金融.exe" set "EXE=%~dp0dist-build\win-unpacked\梵澄金融.exe"
+if not defined EXE (
+  echo 未找�?FanchengFinance.exe，请先完成打包或运行「更新梵澄金�?bat�?
+  pause
+  exit /b 1
+)
 start "" "%EXE%"
 
 echo.
