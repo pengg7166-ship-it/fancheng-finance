@@ -65,6 +65,7 @@ function isMaterialChange(prev, next) {
     return true;
   }
   if ((prev.regime || '') !== (next.regime || '')) return true;
+  if ((prev.latencyState || '') !== (next.latencyState || '')) return true;
   return false;
 }
 
@@ -91,6 +92,12 @@ function buildReasonTags(prev, next, inst) {
 
   if ((prev?.regime || '') !== (inst.regime || '')) {
     tags.push(`环境→${inst.regimeLabel || inst.regime}`);
+  }
+
+  const latency = inst.latencyState || next.latencyState;
+  const prevLatency = prev?.latencyState;
+  if (latency && prevLatency && latency !== prevLatency) {
+    tags.push(`反射→${inst.latencyLabel || latency}`);
   }
 
   const price = inst.price;
@@ -122,6 +129,12 @@ function buildSnapshotRecord(inst, prev, dataVersion) {
     baseRange: { low: base.low, mid: base.mid, high: base.high },
     scenarios: inst.scenarios,
     factorBreakdown: inst.factorBreakdown,
+    wInstant: inst.wInstant,
+    wDelayed: inst.wDelayed,
+    instantScore: inst.instantScore,
+    delayedScore: inst.delayedScore,
+    latencyState: inst.latencyState,
+    latencyLabel: inst.latencyLabel,
     volForecast: inst.volForecast || {
       baseline: inst.smoothedVol?.volForecastPct,
       shockVol: inst.shockVol,
@@ -219,6 +232,18 @@ function recordOutlookSnapshots(instruments, { dataVersion } = {}) {
   return { recorded, root };
 }
 
+function countTodayArchiveEntries() {
+  const root = getOutlookHistoryRoot();
+  if (!root) return 0;
+  const fp = path.join(root, `${todayKey()}.jsonl`);
+  if (!fs.existsSync(fp)) return 0;
+  try {
+    return fs.readFileSync(fp, 'utf8').split('\n').filter(Boolean).length;
+  } catch {
+    return 0;
+  }
+}
+
 function readJsonlForDays(instrumentId, days) {
   const root = getOutlookHistoryRoot();
   if (!root) return [];
@@ -261,6 +286,7 @@ function getOutlookHistory(instrumentId, days = 7) {
     instrumentId: instrumentId || null,
     days,
     latest,
+    todayCount: countTodayArchiveEntries(),
     changes: rows.slice(0, 500),
   };
 }
@@ -295,7 +321,9 @@ function attachChangeDelta(inst) {
     deltaMid: mid != null && prevMid != null ? +(mid - prevMid).toFixed(3) : null,
     prevDirection: prev.directionLabel || prev.directionTier,
     prevRegime: prev.regime,
+    prevLatencyState: prev.latencyState,
     regimeChanged: (prev.regime || '') !== (inst.regime || ''),
+    latencyChanged: (prev.latencyState || '') !== (inst.latencyState || ''),
     reasonTags: [],
   };
   inst.changeDelta.reasonTags = buildReasonTags(prev, inst.changeDelta, inst);
@@ -307,6 +335,7 @@ module.exports = {
   readLatestSnapshot,
   isMaterialChange,
   recordOutlookSnapshots,
+  countTodayArchiveEntries,
   getOutlookHistory,
   exportOutlookHistory,
   attachChangeDelta,

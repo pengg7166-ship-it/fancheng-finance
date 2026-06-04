@@ -2824,8 +2824,18 @@ function renderOutlookChangeDelta(inst) {
       ? `综合分 ${d.deltaScore >= 0 ? '+' : ''}${Number(d.deltaScore).toFixed(2)}`
       : '';
   const midPart = d.deltaMid != null ? `区间中心 ${d.deltaMid >= 0 ? '+' : ''}${Number(d.deltaMid).toFixed(2)}%` : '';
+  const latencyPart =
+    d.latencyChanged && inst.latencyLabel ? `反射 ${inst.latencyLabel}` : '';
   const tags = (d.reasonTags || []).map((t) => escapeHtml(t)).join(' · ');
-  return `<p class="outlook-change-delta"><strong>较上次</strong> ${[scorePart, midPart].filter(Boolean).join(' · ')}${tags ? ` · ${tags}` : ''}</p>`;
+  return `<p class="outlook-change-delta"><strong>较上次 Δ</strong> ${[scorePart, midPart, latencyPart].filter(Boolean).join(' · ')}${tags ? ` · ${tags}` : ''}</p>`;
+}
+
+function renderOutlookLatencyBlock(inst) {
+  if (inst.latencyState == null && inst.wInstant == null) return '';
+  const wI = inst.wInstant != null ? `${(inst.wInstant * 100).toFixed(0)}%` : '—';
+  const wD = inst.wDelayed != null ? `${(inst.wDelayed * 100).toFixed(0)}%` : '—';
+  const state = inst.latencyLabel || inst.latencyState || '—';
+  return `<p class="outlook-latency-line">双速通道：即时权重 ${wI} · 滞后权重 ${wD} · 状态 <strong>${escapeHtml(state)}</strong>${inst.instantScore != null ? ` · 即时分${inst.instantScore >= 0 ? '+' : ''}${Number(inst.instantScore).toFixed(2)}` : ''}${inst.delayedScore != null ? ` · 滞后分${inst.delayedScore >= 0 ? '+' : ''}${Number(inst.delayedScore).toFixed(2)}` : ''}</p>`;
 }
 
 function renderOutlookRegimeBadge(inst) {
@@ -2931,6 +2941,7 @@ function renderOutlookInstrumentDetail(inst) {
       <button type="button" class="btn-link outlook-history-btn" data-action="open-outlook-history" data-instrument="${escapeAttr(inst.id)}">研判存档${historyCount ? ` (${historyCount})` : ''}</button>
     </div>
     ${renderOutlookChangeDelta(inst)}
+    ${renderOutlookLatencyBlock(inst)}
     ${renderOutlookScenariosTable(inst)}
     <p class="outlook-rationale">${escapeHtml(inst.rationale || '')}</p>
     ${inst.profileSummary ? `<p class="outlook-profile-summary">${escapeHtml(inst.profileSummary)}</p>` : ''}
@@ -3318,7 +3329,7 @@ function renderOutlookPanel(source) {
         <h3 class="outlook-section-title">四大类 outlook 参考</h3>
         <div class="outlook-category-grid">${categoryCards}</div>
       </section>
-      <p class="policy-note outlook-note">v1.19.0 动态多情景 · 双轨波动 · regime 权重 · 研判存档 · ${instruments.length} 品种 · 仅供参考</p>
+      <p class="policy-note outlook-note">v1.20.0 双速反射 · 四情景 · 研判存档 · ${instruments.length} 品种${source.stats?.todayArchiveCount != null ? ` · 今日存档 ${source.stats.todayArchiveCount} 条` : ''} · 仅供参考</p>
     </div>
   </div>`;
 }
@@ -3358,7 +3369,7 @@ function refreshOutlookPanelSections(panel, source) {
       data.instruments
         .map(
           (i) =>
-            `${i.id}:${i.direction}:${i.price}:${i.regime}:${i.judgementUpdatedAt}:${i.scenarios?.base?.low}:${i.scenarios?.base?.high}:${i.compositeScore}`
+            `${i.id}:${i.direction}:${i.price}:${i.regime}:${i.latencyState}:${i.judgementUpdatedAt}:${i.scenarios?.base?.low}:${i.scenarios?.base?.high}:${i.compositeScore}`
         )
         .join(','),
     ]);
@@ -3423,7 +3434,7 @@ async function openOutlookHistoryModal(instrumentId) {
   }
   const title = modal.querySelector('h4');
   const body = modal.querySelector('.outlook-history-body');
-  if (title) title.textContent = `${instrumentId} · 最近变更`;
+  if (title) title.textContent = `${instrumentId} · 研判存档 · 最近 20 条`;
   if (body) body.innerHTML = '<div class="spinner inline-spinner"></div> 加载存档…';
   modal.hidden = false;
 
@@ -3444,7 +3455,8 @@ async function openOutlookHistoryModal(instrumentId) {
         const tags = (r.reasonTags || []).map((t) => escapeHtml(t)).join(' · ');
         const range = r.baseRange ? formatOutlookRangePct(r.baseRange) : '—';
         const dScore = r.deltaScore != null ? ` Δ分${r.deltaScore >= 0 ? '+' : ''}${r.deltaScore}` : '';
-        return `<li><span class="outlook-history-ts">${escapeHtml(ts)}</span> <span class="outlook-history-dir">${escapeHtml(r.directionLabel || '')}</span> <span class="outlook-history-range">${range}</span>${dScore ? `<span class="outlook-history-delta">${escapeHtml(dScore.trim())}</span>` : ''}${tags ? `<span class="outlook-history-tags">${tags}</span>` : ''}</li>`;
+        const latency = r.latencyLabel || r.latencyState ? ` · ${escapeHtml(r.latencyLabel || r.latencyState)}` : '';
+        return `<li><span class="outlook-history-ts">${escapeHtml(ts)}</span> <span class="outlook-history-dir">${escapeHtml(r.directionLabel || '')}</span> <span class="outlook-history-range">${range}</span>${dScore ? `<span class="outlook-history-delta">${escapeHtml(dScore.trim())}</span>` : ''}${latency}${tags ? `<span class="outlook-history-tags">${tags}</span>` : ''}</li>`;
       })
       .join('')}</ul>${data.root ? `<p class="outlook-archive-path">${escapeHtml(data.root)}</p>` : ''}`;
   }

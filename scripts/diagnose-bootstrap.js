@@ -143,6 +143,10 @@ app.whenReady().then(async () => {
   if (auRangeSpan != null && !auRangeOk) {
     console.error(`[diagnose] au next-day range span ${auRangeSpan.toFixed(2)}% exceeds 1.5% cap`);
   }
+  const adaptiveOk =
+    auInst?.wInstant != null &&
+    auInst?.latencyState != null &&
+    typeof auInst?.factorBreakdown?.instant === 'number';
   if (
     firstThree.length >= 3 &&
     hasCommodities &&
@@ -153,10 +157,11 @@ app.whenReady().then(async () => {
       !factorBreakdownDistinct ||
       !volForecastNumeric ||
       !scenariosOk ||
-      !regimeOk)
+      !regimeOk ||
+      !adaptiveOk)
   ) {
     console.error(
-      `[diagnose] outlook diversity check FAILED rangesDistinct=${rangesDistinct} scoresDistinct=${scoresDistinct} noPendingDirection=${noPendingDirection} auRangeOk=${auRangeOk} factorBreakdownDistinct=${factorBreakdownDistinct} volForecastNumeric=${volForecastNumeric} scenariosOk=${scenariosOk} regimeOk=${regimeOk} auSpan=${auRangeSpan}`
+      `[diagnose] outlook diversity check FAILED rangesDistinct=${rangesDistinct} scoresDistinct=${scoresDistinct} noPendingDirection=${noPendingDirection} auRangeOk=${auRangeOk} factorBreakdownDistinct=${factorBreakdownDistinct} volForecastNumeric=${volForecastNumeric} scenariosOk=${scenariosOk} regimeOk=${regimeOk} adaptiveOk=${adaptiveOk} auSpan=${auRangeSpan}`
     );
   }
   console.log(

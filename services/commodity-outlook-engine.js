@@ -3,6 +3,7 @@
  */
 const diskCache = require('./disk-cache');
 const volModel = require('./commodity-volatility-model');
+const marketAdaptive = require('./commodity-market-adaptive');
 const outlookHistory = require('./commodity-outlook-history');
 const { normalizeCommodityId } = require('./policy-commodity-map');
 const { getCommodityMeta, getAllCommodities } = require('./commodities-catalog');
@@ -23,7 +24,8 @@ const {
 const OUTLOOK_DISK_KEY = 'commodity-outlook-v4.json';
 const OUTLOOK_DISK_TTL_MS = 60 * 1000;
 const OUTLOOK_RECOMPUTE_DEBOUNCE_MS = 800;
-const PRICE_OI_CHANGE_THRESHOLD_PCT = 0.12;
+const PRICE_OI_CHANGE_THRESHOLD_PCT = 0.15;
+const OUTLOOK_ENGINE_VERSION = 'v1.20.0';
 
 /** 市场研判环境（条件权重，非固定） */
 const REGIME_IDS = ['riskOn', 'riskOff', 'liquidityPanic', 'supplyShock', 'weatherShock', 'neutral'];
@@ -281,6 +283,9 @@ const FACTOR_BREAKDOWN_LABELS = {
   volLevel: '波动水平',
   volTrend: '波动趋势',
   volForecastPct: 'σ预测',
+  instant: '即时通道',
+  delayed: '滞后通道',
+  latency: '反射状态',
 };
 
 function findUsIndices(indicesSource) {
@@ -1198,6 +1203,7 @@ function computeNextDayRangePct({
   volumeRatio,
   shockVol: shockVolIn,
   compositeVolPct: compositeVolIn,
+  instantChannelFired = false,
 }) {
   const classMax = getClassMaxPct(sector, instrumentId);
   const idLower = String(instrumentId || '').toLowerCase();
@@ -1214,13 +1220,14 @@ function computeNextDayRangePct({
       smoothedVol,
       newsShock,
     });
+  const boostedShock = instantChannelFired ? shockVol * 1.12 + 0.08 : shockVol;
   const shockWeight = volModel.computeShockWeight({
     newsHitCount: newsFactor?.hitCount ?? 0,
     highStarCount,
     volumeRatio: volumeRatio ?? 1,
   });
   const compositeVol =
-    compositeVolIn ?? volModel.computeCompositeVolPct({ baselineVol, shockVol, shockWeight });
+    compositeVolIn ?? volModel.computeCompositeVolPct({ baselineVol, shockVol: boostedShock, shockWeight });
 
   const prevVolRef = smoothedVol?.prevForecastPct ?? readPrevVolForecast(instrumentId) ?? baselineVol;
   const tierMult = volMultiplier(volatilityTier || 'medium');
@@ -1287,7 +1294,7 @@ function computeNextDayRangePct({
   let biasLabel = directionLabel(bias);
   if (Math.abs(compositeScore || 0) <= 0.12) biasLabel = '震荡';
 
-  const volSubline = `基线 ${baselineVol.toFixed(2)}% + 突变${shockVol.toFixed(2)}%×${shockWeight} → ${compositeVol.toFixed(2)}% · 昨日 ${Number(prevVolRef).toFixed(2)}%`;
+  const volSubline = `基线 ${baselineVol.toFixed(2)}% + 突变${boostedShock.toFixed(2)}%×${shockWeight} → ${compositeVol.toFixed(2)}% · 昨日 ${Number(prevVolRef).toFixed(2)}%`;
 
   return {
     low: +low.toFixed(3),
@@ -1302,7 +1309,7 @@ function computeNextDayRangePct({
     histVol20dDisplay: `历史20日均波动 ±${histVol20d.toFixed(2)}%`,
     volForecastPct: +compositeVol.toFixed(4),
     baselineVolPct: +baselineVol.toFixed(4),
-    shockVol: +shockVol.toFixed(4),
+    shockVol: +boostedShock.toFixed(4),
     shockWeight: +Number(shockWeight).toFixed(3),
     compositeVolPct: +compositeVol.toFixed(4),
     volForecastDisplay: `σ${compositeVol.toFixed(2)}% (平滑+突变)`,
@@ -1570,11 +1577,29 @@ function buildInstrumentOutlooks(sources, globalCtx = null) {
       delete factorBreakdown._regime;
       delete factorBreakdown._regimeMultipliers;
 
-      let compositeScore = clamp((factorBreakdown._sum ?? 0) + (volBiasParts.volBias || 0), -1, 1);
+      const factorComposite = clamp((factorBreakdown._sum ?? 0) + (volBiasParts.volBias || 0), -1, 1);
       delete factorBreakdown._sum;
       if (volBiasParts.volForecastPct != null) {
         factorBreakdown.volForecastPct = +volBiasParts.volForecastPct.toFixed(2);
       }
+
+      const vix = parseVix(sources.fed);
+      const adaptive = marketAdaptive.computeAdaptiveOutlook({
+        intradayChangePct: technical.intraday?.changePct ?? mergedQuote.changePct,
+        intradayScore: technical.intraday?.score || 0,
+        volumeRatio: technical.volume?.ratio ?? 1,
+        newsHits: newsImpact.hits,
+        sources,
+        vix,
+        oiDeltaPct: technical.oi?.deltaPct,
+        oiScore: inventoryScore,
+        maStack: technical.maStack,
+        smoothedVol: technical.smoothedVol,
+        technicalScore: technical.techScore,
+        macroScores,
+      });
+      Object.assign(factorBreakdown, adaptive.factorBreakdown);
+      const compositeScore = clamp(adaptive.compositeScore * 0.72 + factorComposite * 0.28, -1, 1);
 
       const dirTier = scoreToDirectionTierWithVol(compositeScore, profile, technical.smoothedVol);
       const direction = directionTierClass(dirTier.direction);
@@ -1591,7 +1616,6 @@ function buildInstrumentOutlooks(sources, globalCtx = null) {
         technical.smoothedVol
       );
 
-      const vix = parseVix(sources.fed);
       const nextDayRangePct = outlookPending
         ? null
         : computeNextDayRangePct({
@@ -1614,6 +1638,7 @@ function buildInstrumentOutlooks(sources, globalCtx = null) {
             instrumentId: spec.id,
             vix,
             volumeRatio: technical.volume?.ratio,
+            instantChannelFired: adaptive.instantFired,
           });
 
       let scenarios = null;
@@ -1664,7 +1689,7 @@ function buildInstrumentOutlooks(sources, globalCtx = null) {
       }));
 
       const factorBreakdownDisplay = Object.entries(factorBreakdown)
-        .filter(([, v]) => Math.abs(v) >= 0.005)
+        .filter(([id, v]) => id !== 'latency' && typeof v === 'number' && Math.abs(v) >= 0.005)
         .map(([id, value]) => {
           const mult = regimeMultipliers[id];
           const label = FACTOR_BREAKDOWN_LABELS[id] || id;
@@ -1714,7 +1739,7 @@ function buildInstrumentOutlooks(sources, globalCtx = null) {
 
       const rationale = outlookPending
         ? `${meta.name}：现价待加载；${mergedQuote.priceReason || '行情未接入'}`
-        : buildInstrumentRationale(meta, factorBreakdown, capitalAttention, newsImpact, profile);
+        : `${buildInstrumentRationale(meta, factorBreakdown, capitalAttention, newsImpact, profile)}；${adaptive.rationaleSuffix}`;
 
       const row = {
         id: meta.id,
@@ -1762,6 +1787,14 @@ function buildInstrumentOutlooks(sources, globalCtx = null) {
         rationale,
         sourceNote: technical.sourceNote,
         profileSummary: `${profile.volatilityTier}波动 · ${profile.supplyDemandType} · ${profile.tradingSession} · ${regimeLabel}`,
+        wInstant: adaptive.wInstant,
+        wDelayed: adaptive.wDelayed,
+        instantScore: adaptive.instantScore,
+        delayedScore: adaptive.delayedScore,
+        instantChannel: adaptive.instantChannel,
+        delayedChannel: adaptive.delayedChannel,
+        latencyState: adaptive.latencyState,
+        latencyLabel: adaptive.latencyLabel,
         dataVersion: lastOutlookDataVersion,
       };
       return outlookHistory.attachChangeDelta(row);
@@ -1805,7 +1838,7 @@ function buildCommodityOutlookFromSources(sources = {}) {
       factors,
       framework: {
         logicModel: '动态多情景+双轨波动+环境regime（部分输入异常，已降级）',
-        version: 'v1.19.0',
+        version: OUTLOOK_ENGINE_VERSION,
         regimes: REGIME_IDS.map((id) => ({ id, label: REGIME_LABELS[id] })),
       },
       globalRegime: globalCtx.regime,
@@ -1844,7 +1877,7 @@ function buildCommodityOutlookFromSources(sources = {}) {
     factors,
     framework: {
       logicModel:
-        '环境regime×品种权重 → 宏观/资金/资讯/技术 → 综合分 → 基线+突变双轨σ → base/bull/bear/stress 四情景',
+        '双速反射(即时/滞后)+环境regime×品种权重 → 综合分 → 基线+突变双轨σ → base/bull/bear/stress 四情景',
       horizons: HORIZON_LABELS,
       factorIds: FACTOR_DEFS.map((f) => f.id),
       instrumentIds: INSTRUMENT_REGISTRY.map((i) => i.id),
@@ -1852,7 +1885,7 @@ function buildCommodityOutlookFromSources(sources = {}) {
       regimes: REGIME_IDS.map((id) => ({ id, label: REGIME_LABELS[id] })),
       rangeFormula: 'compositeVol=基线EMA+shockWeight×突变；情景区间按方向偏置',
       sectorClassCaps: SECTOR_CLASS_MAX_PCT,
-      version: 'v1.19.0',
+      version: OUTLOOK_ENGINE_VERSION,
     },
     globalRegime: globalCtx.regime,
     globalRegimeLabel: globalCtx.regimeLabel,
@@ -1901,6 +1934,8 @@ async function fetchCommodityOutlookSource(sources) {
     dataVersion: lastOutlookDataVersion,
   });
   payload.historyArchivePath = hist.root;
+  payload.stats = payload.stats || {};
+  payload.stats.todayArchiveCount = outlookHistory.countTodayArchiveEntries();
   diskCache.write(OUTLOOK_DISK_KEY, { data: payload, savedAt: Date.now() });
   return payload;
 }
@@ -2005,4 +2040,5 @@ module.exports = {
   directionLabel,
   starsToHtml,
   formatJudgementTime,
+  OUTLOOK_ENGINE_VERSION,
 };

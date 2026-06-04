@@ -1,5 +1,17 @@
 # 更新日志
 
+## v1.20.0 — 2026-06-04
+
+### 升级：双速市场反射 + 四情景 + 研判存档
+
+- **双速通道** `commodity-market-adaptive.js`：即时(盘中/快讯/VIX) + 滞后(OI/MA/政策1–24h)；`latencyState` 同步/滞后/背离；综合分 = w即时×即时分 + w滞后×滞后分
+- **四情景** `base` / `bull` / `bear` / `stress` 独立 % 区间；展开行表格展示
+- **存档** `E:\FanchengFinance\data\outlook-history\YYYY-MM-DD.jsonl`：Δ分≥0.05 / 方向变 / 中心≥0.15% / regime变 / 反射状态变 → 异步 append；IPC `getOutlookHistory`
+- **UI**：较上次 Δ、研判存档（最近20条）、页脚「今日存档 N 条」、双速通道说明
+- 页脚版本 **v1.20.0**
+
+---
+
 ## v1.19.0 — 2026-06-04
 
 ### 升级：大宗研判动态多情景 + 变更存档
