@@ -9,6 +9,7 @@
 - **预测缘由 / 历史对照**：引擎 `historicalContext`（近60日类似波动、次日均涨跌、先例摘要）；表内「预测依据」列 + 详情「预测缘由」「历史对照」；打开自动选中首行
 - **每日对照**：`outlook-history/daily/YYYY-MM-DD/summary.json` 日快照；启动 `resolveYesterdayPredictions`；工具栏「每日对照」弹窗；详情「昨日存档」行
 - 页脚版本 **v1.23.0**
+- 会话收尾：每日研判存档与对照 UI
 
 ---
 
