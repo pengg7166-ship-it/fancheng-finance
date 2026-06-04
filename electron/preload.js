@@ -36,6 +36,8 @@ contextBridge.exposeInMainWorld('fancheng', {
   fetchGeopoliticsLive: (options) => safeInvoke('fetch-geopolitics-live', options),
   fetchClimateLive: (options) => safeInvoke('fetch-climate-live', options),
   fetchOutlookLive: (options) => safeInvoke('fetch-outlook-live', options),
+  getOutlookHistory: (instrumentId, days) => safeInvoke('get-outlook-history', instrumentId, days),
+  exportOutlookHistory: (instrumentId, days) => safeInvoke('export-outlook-history', instrumentId, days),
   onForexLive: (callback) => {
     const handler = (_event, payload) => callback(payload);
     ipcRenderer.on('forex-live', handler);

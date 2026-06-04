@@ -289,7 +289,7 @@ function pushClimateLiveToRenderer(data) {
 }
 
 function pushOutlookLiveToRenderer(data) {
-  if (!data?.categories?.length) return;
+  if (!data?.categories?.length && !data?.instruments?.length) return;
   pushToRenderer('outlook-live', data, hashLiveItemsPayload);
 }
 
@@ -647,6 +647,24 @@ ipcMain.handle('refresh-commodity-news', async (_event, commodityId) => {
       if (fallback) return { ...fallback, fromCache: true };
     }
     return { error: localizeErrorMessage(err.message || '关联资讯刷新失败') };
+  }
+});
+
+ipcMain.handle('get-outlook-history', async (_event, instrumentId, days = 7) => {
+  try {
+    const { getOutlookHistory } = require('../services/commodity-outlook-history');
+    return getOutlookHistory(instrumentId, days);
+  } catch (err) {
+    return { error: localizeErrorMessage(err.message || '研判存档读取失败') };
+  }
+});
+
+ipcMain.handle('export-outlook-history', async (_event, instrumentId, days = 30) => {
+  try {
+    const { exportOutlookHistory } = require('../services/commodity-outlook-history');
+    return exportOutlookHistory(instrumentId, days);
+  } catch (err) {
+    return { error: localizeErrorMessage(err.message || '研判存档导出失败') };
   }
 });
 

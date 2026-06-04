@@ -12,6 +12,7 @@ const {
   buildCommodityOutlookFromSources,
   getCachedCommodityOutlookSource,
   fetchCommodityOutlookSource,
+  notifyOutlookSourcesRefreshed,
 } = require('./commodity-outlook-engine');
 const { fetchBojSource, getCachedBojSource, ensureBojPayloadLocalized } = require('./boj-fetcher');
 const { fetchFedSpeeches } = require('./cb-speeches');
@@ -472,6 +473,7 @@ function scheduleBackgroundRefresh() {
   if (refreshPromise) return refreshPromise;
   refreshPromise = refreshAllData()
     .then((payload) => {
+      if (payload?.sources) notifyOutlookSourcesRefreshed(payload.sources);
       if (typeof onBackgroundRefresh === 'function') onBackgroundRefresh(payload);
       return payload;
     })
