@@ -703,6 +703,7 @@ const CommoditiesUI = (() => {
     init: ensureInit,
     ensureInit,
     refreshLive,
+    mergeLiveData,
     resetCache,
     onTabActivated,
     focusCommodity: selectCommodity,
