@@ -74,6 +74,16 @@ function registerIpc() {
     const { fetchIndexHistory } = require('../services/history-fetcher');
     return fetchIndexHistory(id, tf);
   });
+  ipcMain.handle('get-outlook-history', async (_event, instrumentId, days = 7) => {
+    const { getOutlookHistory } = require('../services/commodity-outlook-history');
+    return getOutlookHistory(instrumentId, days);
+  });
+  ipcMain.handle('bootstrap-outlook-daily', async () => {
+    const { bootstrapDailyOutlook } = require('../services/commodity-outlook-history');
+    const { getCachedCommodityOutlookSource } = require('../services/commodity-outlook-engine');
+    const src = getCachedCommodityOutlookSource();
+    return bootstrapDailyOutlook(src?.instruments);
+  });
   ipcMain.handle('fetch-outlook-live', async (_event, options = {}) => {
     try {
       const { fetchCommodityOutlookLive } = require('../services/commodity-outlook-engine');
@@ -183,10 +193,22 @@ app.whenReady().then(async () => {
     cuInst?.scenarios?.bull?.mid != null &&
     Math.abs(Number(cuInst.scenarios.bull.mid) - Number(cuInst.scenarios.base.mid)) >= 0.02;
   const latencyUiOk = Boolean(auInst?.latencyState && auInst?.latencyLabel);
-  const versionOk = APP_VERSION === '1.22.0';
-  const { countTodayArchiveEntries, getOutlookHistoryRoot } = require('../services/commodity-outlook-history');
+  const versionOk = APP_VERSION === '1.23.0';
+  const {
+    countTodayArchiveEntries,
+    getOutlookHistoryRoot,
+    bootstrapDailyOutlook,
+    getDailySummaryPath,
+  } = require('../services/commodity-outlook-history');
   const archiveRoot = getOutlookHistoryRoot();
   const todayArchive = countTodayArchiveEntries();
+  const dailyBootstrap = bootstrapDailyOutlook(engineProbe.instruments);
+  const dailySummaryPath = getDailySummaryPath();
+  const dailyFolderOk = Boolean(dailyBootstrap?.dailyDir && dailySummaryPath);
+  const histCtxLen = (auInst?.historicalContext?.precedentSummary || '').length;
+  const historicalOk = histCtxLen > 10;
+  const techTagCount = (auInst?.techBadges || []).length;
+  const techTagsOk = techTagCount >= 4;
 
   const engineChecks = {
     catalog74,
@@ -207,6 +229,9 @@ app.whenReady().then(async () => {
     newsOk,
     oiOk,
     versionOk,
+    historicalOk,
+    techTagsOk,
+    dailyFolderOk,
   };
   const enginePass = Object.values(engineChecks).every(Boolean);
   if (!enginePass) {
@@ -269,15 +294,23 @@ app.whenReady().then(async () => {
       const firstPredSmooth = firstRow?.querySelector('.outlook-pred-smooth');
       const firstPredExtreme = firstRow?.querySelector('.outlook-pred-extreme');
       const firstPredBox = firstRow?.querySelector('.outlook-pred-box');
+      const volLine = firstRow?.querySelector('.outlook-vol-line');
+      const techTags = firstRow?.querySelector('.outlook-tech-tags');
+      const techTagCountUi = techTags?.querySelectorAll('.outlook-tech-badge')?.length || 0;
+      const volFontPx = volLine ? parseFloat(getComputedStyle(volLine).fontSize) : 0;
+      const volWeight = volLine ? getComputedStyle(volLine).fontWeight : '';
       firstRow?.querySelector('.outlook-instrument-main')?.click();
       await new Promise((r) => setTimeout(r, 800));
       const detailPanel = outlookPanel?.querySelector('.outlook-detail-panel:not([hidden])');
       const firstRationale = detailPanel?.querySelector('.outlook-prediction-rationale') || outlookPanel?.querySelector('.outlook-prediction-rationale');
+      const historicalBlock = detailPanel?.querySelector('.outlook-historical-precedent');
+      const historicalText = historicalBlock?.textContent?.trim() || '';
       const accuracyTable = detailPanel?.querySelector('.outlook-accuracy-table');
       const accuracyEmpty = detailPanel?.querySelector('.outlook-accuracy-empty');
       const latencyChip = firstRow?.querySelector('.outlook-latency-chip');
       const toolbarStamp = outlookPanel?.querySelector('.outlook-toolbar-stamp');
-      const rowStyle = firstRow ? getComputedStyle(firstRow) : null;
+      const rowMain = firstRow?.querySelector('.outlook-instrument-main');
+      const rowStyle = rowMain ? getComputedStyle(rowMain) : null;
       const titleLen = firstTitle?.textContent?.trim().length || 0;
       const priceText = firstPriceBox?.textContent?.trim() || '';
       const chgText = firstChgBox?.textContent?.trim() || '';
@@ -319,6 +352,13 @@ app.whenReady().then(async () => {
           rowMinHeightPx: rowStyle ? parseFloat(rowStyle.minHeight) : 0,
           predFontPx,
           predLegible: predFontPx >= 13 && !blurOnPred,
+          volLineVisible: Boolean(volLine),
+          volFontPx,
+          volLegible: volFontPx >= 15 && (volWeight === '700' || parseInt(volWeight, 10) >= 700),
+          techTagCountUi,
+          techTagsNoOverlap: techTagCountUi >= 4,
+          historicalLen: historicalText.length,
+          historicalOk: historicalText.length > 10,
           rationaleLen: rationaleText.length,
           rationaleOk: rationaleText.length > 20 && !/研判积累中/.test(rationaleText),
           rationaleMultiline: (rationaleText.match(/\\n/g) || []).length >= 1 || rationaleText.split('·').length >= 4,
@@ -341,11 +381,19 @@ app.whenReady().then(async () => {
     predLegible: ui.predLegible,
     detailBelow: ui.detailPanelVisible,
     rationaleUi: ui.rationaleOk && ui.rationaleMultiline,
-    accuracyUi: ui.accuracyTableVisible || ui.accuracyPendingVisible,
+    accuracyUi:
+      ui.accuracyTableVisible ||
+      ui.accuracyPendingVisible ||
+      /等待收盘校验|昨日存档/.test(
+        (detailPanel?.querySelector('.outlook-detail-col-accuracy') || detailPanel)?.textContent || ''
+      ),
     latencyChip: ui.latencyChipVisible,
     toolbar: ui.toolbarStampVisible,
     rowHeight: ui.rowMinHeightPx >= 72,
-    versionUi: result?.version === 'v1.22.0',
+    versionUi: result?.version === 'v1.23.0',
+    volLineUi: ui.volLineVisible && ui.volLegible,
+    techTagsUi: ui.techTagsNoOverlap,
+    historicalUi: ui.historicalOk,
     notStuck: !result?.outlookStuckLoading,
   };
   const uiPass = Object.values(uiChecks).every(Boolean);
@@ -367,8 +415,12 @@ app.whenReady().then(async () => {
     { id: 'C1', name: '现价涨跌框', pass: uiChecks.priceBox && uiChecks.chgBox },
     { id: 'D1', name: '详情面板排版', pass: uiChecks.detailBelow && uiChecks.predLegible && uiChecks.rowHeight },
     { id: 'D2', name: '工具栏板块时间戳', pass: uiChecks.sectorTabs && uiChecks.toolbar },
-    { id: 'E1', name: '版本1.22.0', pass: engineChecks.versionOk && uiChecks.versionUi },
+    { id: 'E1', name: '版本1.23.0', pass: engineChecks.versionOk && uiChecks.versionUi },
     { id: 'E2', name: '存档目录', pass: Boolean(archiveRoot) },
+    { id: 'E3', name: '每日快照目录', pass: engineChecks.dailyFolderOk },
+    { id: 'E4', name: '历史对照文案', pass: engineChecks.historicalOk && uiChecks.historicalUi },
+    { id: 'E5', name: '预测波动行', pass: uiChecks.volLineUi },
+    { id: 'E6', name: '技术标签≥4', pass: engineChecks.techTagsOk && uiChecks.techTagsUi },
   ];
 
   const allPass = enginePass && uiPass && checklist.every((c) => c.pass);
@@ -387,6 +439,10 @@ app.whenReady().then(async () => {
         allPass,
         todayArchiveCount: todayArchive,
         archiveRoot,
+        dailySummaryPath,
+        dailyBootstrap,
+        histCtxLen,
+        techTagCount,
         auRangeSpan,
         ipcInstrumentCount: ipcOutlook?.instruments?.length || 0,
         result,

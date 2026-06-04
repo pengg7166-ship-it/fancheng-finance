@@ -400,6 +400,14 @@ function createWindow() {
 app.whenReady().then(() => {
   config.init(app.getPath('userData'));
   warmAllCaches(app.getPath('userData'));
+  setTimeout(() => {
+    try {
+      const { bootstrapDailyOutlook } = require('../services/commodity-outlook-history');
+      bootstrapDailyOutlook();
+    } catch {
+      // non-fatal
+    }
+  }, 4000);
   setDataRefreshListener((payload) => {
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send('data-refreshed', payload);
@@ -701,6 +709,28 @@ ipcMain.handle('export-outlook-history', async (_event, instrumentId, days = 30)
     return exportOutlookHistory(instrumentId, days);
   } catch (err) {
     return { error: localizeErrorMessage(err.message || '研判存档导出失败') };
+  }
+});
+
+ipcMain.handle('get-outlook-daily-compare', async (_event, dateA, dateB) => {
+  try {
+    const { getDailyCompare, dayKeyOffset, todayKey } = require('../services/commodity-outlook-history');
+    const a = dateA || dayKeyOffset(-1);
+    const b = dateB || todayKey();
+    return getDailyCompare(a, b);
+  } catch (err) {
+    return { error: localizeErrorMessage(err.message || '每日对照读取失败') };
+  }
+});
+
+ipcMain.handle('bootstrap-outlook-daily', async () => {
+  try {
+    const { bootstrapDailyOutlook } = require('../services/commodity-outlook-history');
+    const { getCachedCommodityOutlookSource } = require('../services/commodity-outlook-engine');
+    const src = getCachedCommodityOutlookSource();
+    return bootstrapDailyOutlook(src?.instruments);
+  } catch (err) {
+    return { error: localizeErrorMessage(err.message || '每日研判存档初始化失败') };
   }
 });
 

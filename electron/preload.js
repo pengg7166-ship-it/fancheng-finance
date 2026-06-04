@@ -38,6 +38,8 @@ contextBridge.exposeInMainWorld('fancheng', {
   fetchOutlookLive: (options) => safeInvoke('fetch-outlook-live', options),
   getOutlookHistory: (instrumentId, days) => safeInvoke('get-outlook-history', instrumentId, days),
   exportOutlookHistory: (instrumentId, days) => safeInvoke('export-outlook-history', instrumentId, days),
+  getOutlookDailyCompare: (dateA, dateB) => safeInvoke('get-outlook-daily-compare', dateA, dateB),
+  bootstrapOutlookDaily: () => safeInvoke('bootstrap-outlook-daily'),
   onForexLive: (callback) => {
     const handler = (_event, payload) => callback(payload);
     ipcRenderer.on('forex-live', handler);

@@ -22,7 +22,271 @@ function getOutlookHistoryRoot() {
   const root = path.join(dataDir, 'outlook-history');
   fs.mkdirSync(root, { recursive: true });
   fs.mkdirSync(path.join(root, 'outlook-snapshots'), { recursive: true });
+  fs.mkdirSync(path.join(root, 'daily'), { recursive: true });
+  fs.mkdirSync(path.join(root, 'daily-compare'), { recursive: true });
   return root;
+}
+
+function dayKeyOffset(days = 0, base = new Date()) {
+  const d = new Date(base);
+  d.setDate(d.getDate() + days);
+  return todayKey(d);
+}
+
+function getDailyDir(day = todayKey()) {
+  const root = getOutlookHistoryRoot();
+  return root ? path.join(root, 'daily', day) : null;
+}
+
+function getDailySummaryPath(day = todayKey()) {
+  const dir = getDailyDir(day);
+  return dir ? path.join(dir, 'summary.json') : null;
+}
+
+function readDailySummary(day) {
+  const fp = getDailySummaryPath(day);
+  if (!fp || !fs.existsSync(fp)) return null;
+  try {
+    return JSON.parse(fs.readFileSync(fp, 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
+function buildDailyInstrumentEntry(inst) {
+  const base = inst.scenarios?.base || inst.nextDayRangePct || {};
+  return {
+    id: inst.id,
+    name: inst.name,
+    predictedLow: base.low ?? null,
+    predictedMid: base.mid ?? null,
+    predictedHigh: base.high ?? null,
+    direction: inst.directionTier || inst.direction || null,
+    directionLabel: inst.directionLabel || null,
+    compositeScore: inst.compositeScore ?? null,
+    priceAtPredict: inst.price ?? null,
+    ts: inst.judgementUpdatedAt || new Date().toISOString(),
+  };
+}
+
+function writeDailySnapshot(instruments, day = todayKey()) {
+  const root = getOutlookHistoryRoot();
+  if (!root || !Array.isArray(instruments) || !instruments.length) {
+    return { wrote: false, path: null, day };
+  }
+
+  const dir = getDailyDir(day);
+  const fp = path.join(dir, 'summary.json');
+  if (fs.existsSync(fp)) return { wrote: false, path: fp, day, count: instruments.length };
+
+  const rows = instruments.filter((i) => i?.id && !i.outlookPending).map(buildDailyInstrumentEntry);
+  const payload = {
+    date: day,
+    savedAt: new Date().toISOString(),
+    instrumentCount: rows.length,
+    instruments: rows,
+  };
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(fp, JSON.stringify(payload, null, 2), 'utf8');
+  return { wrote: true, path: fp, day, count: rows.length };
+}
+
+function computeDayReturnPct(bars, day) {
+  if (!bars?.length) return null;
+  const sorted = [...bars].sort((a, b) => String(a.date).localeCompare(String(b.date)));
+  const idx = sorted.findIndex((b) => String(b.date) === day);
+  if (idx <= 0) return null;
+  const prev = sorted[idx - 1];
+  const cur = sorted[idx];
+  if (!prev?.close || !cur?.close) return null;
+  return +(((cur.close - prev.close) / prev.close) * 100).toFixed(3);
+}
+
+function computeHitFromMid(predictedMid, actualPct, predictedLow, predictedHigh) {
+  return computeHitDirection(predictedMid, actualPct, predictedLow, predictedHigh);
+}
+
+function resolveYesterdayPredictions(referenceDay = todayKey()) {
+  const root = getOutlookHistoryRoot();
+  if (!root) return { resolved: 0, path: null };
+
+  const yday = dayKeyOffset(-1, new Date(`${referenceDay}T12:00:00`));
+  const summary = readDailySummary(yday);
+  if (!summary?.instruments?.length) {
+    return { resolved: 0, path: null, yday, reason: 'no_yesterday_summary' };
+  }
+
+  const rows = [];
+  let hits = 0;
+  let total = 0;
+
+  for (const row of summary.instruments) {
+    const bars = readKlineBarsFromCache(row.id);
+    const actualPct = computeDayReturnPct(bars, yday);
+    if (actualPct == null) {
+      rows.push({ ...row, actualPct: null, gapPct: null, hitDirection: null });
+      continue;
+    }
+    const predictedMid = Number(row.predictedMid);
+    const gapPct = +(actualPct - predictedMid).toFixed(3);
+    const hitDirection = computeHitFromMid(
+      predictedMid,
+      actualPct,
+      row.predictedLow,
+      row.predictedHigh
+    );
+    total += 1;
+    if (hitDirection) hits += 1;
+    rows.push({
+      id: row.id,
+      name: row.name,
+      predictedMid: row.predictedMid,
+      actualPct,
+      gapPct,
+      hitDirection,
+    });
+  }
+
+  const compareDir = path.join(root, 'daily-compare');
+  fs.mkdirSync(compareDir, { recursive: true });
+  const outPath = path.join(compareDir, `${referenceDay}.json`);
+  const payload = {
+    date: referenceDay,
+    yday,
+    resolvedAt: new Date().toISOString(),
+    hitRate: total > 0 ? +(hits / total).toFixed(3) : null,
+    hits,
+    total,
+    rows,
+  };
+  fs.writeFileSync(outPath, JSON.stringify(payload, null, 2), 'utf8');
+  return { resolved: total, path: outPath, yday, hits, total, hitRate: payload.hitRate };
+}
+
+function getDailyCompare(dateA, dateB) {
+  const a = readDailySummary(dateA);
+  const b = readDailySummary(dateB);
+  const ydayResolved = resolveYesterdayPredictions(dateB);
+  const compareFile = path.join(getOutlookHistoryRoot() || '', 'daily-compare', `${dateB}.json`);
+  let actualById = new Map();
+  if (fs.existsSync(compareFile)) {
+    try {
+      const cmp = JSON.parse(fs.readFileSync(compareFile, 'utf8'));
+      for (const r of cmp.rows || []) {
+        if (r.id) actualById.set(r.id, r);
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  const mapA = new Map((a?.instruments || []).map((i) => [i.id, i]));
+  const mapB = new Map((b?.instruments || []).map((i) => [i.id, i]));
+  const ids = [...new Set([...mapA.keys(), ...mapB.keys()])].sort((x, y) =>
+    String(mapA.get(x)?.name || x).localeCompare(String(mapA.get(y)?.name || y), 'zh-CN')
+  );
+
+  const rows = ids.map((id) => {
+    const prev = mapA.get(id);
+    const cur = mapB.get(id);
+    const actual = actualById.get(id);
+    const yMid = prev?.predictedMid ?? null;
+    const yActual = actual?.actualPct ?? null;
+    const yGap = actual?.gapPct ?? (yActual != null && yMid != null ? +(yActual - yMid).toFixed(3) : null);
+    const tMid = cur?.predictedMid ?? null;
+    const hit = actual?.hitDirection;
+    return {
+      id,
+      name: cur?.name || prev?.name || id,
+      yesterdayPredictedMid: yMid,
+      yesterdayActualPct: yActual,
+      yesterdayGapPct: yGap,
+      todayPredictedMid: tMid,
+      directionHit: hit,
+    };
+  });
+
+  return {
+    dateA,
+    dateB,
+    rows,
+    aggregateHitRate: ydayResolved.hitRate ?? null,
+    comparePath: ydayResolved.path,
+    summaryPathA: getDailySummaryPath(dateA),
+    summaryPathB: getDailySummaryPath(dateB),
+  };
+}
+
+function bootstrapDailyOutlook(instruments) {
+  const root = getOutlookHistoryRoot();
+  if (!root) return { ok: false };
+
+  const today = todayKey();
+  const yday = dayKeyOffset(-1);
+  let snapshot = { wrote: false, path: getDailySummaryPath(today) };
+
+  if (instruments?.length) {
+    snapshot = writeDailySnapshot(instruments, today);
+  } else {
+    const cached = readDailySummary(today);
+    if (!cached) {
+      const { getCachedCommodityOutlookSource } = require('./commodity-outlook-engine');
+      const src = getCachedCommodityOutlookSource();
+      if (src?.instruments?.length) snapshot = writeDailySnapshot(src.instruments, today);
+    }
+  }
+
+  const resolved = resolveYesterdayPredictions(today);
+  return {
+    ok: true,
+    root,
+    dailyDir: getDailyDir(today),
+    summaryPath: snapshot.path || getDailySummaryPath(today),
+    snapshotWrote: snapshot.wrote,
+    resolved,
+  };
+}
+
+function getYesterdayArchiveCompare(instrumentId) {
+  const today = todayKey();
+  const yday = dayKeyOffset(-1);
+  const summary = readDailySummary(yday);
+  const row = summary?.instruments?.find((i) => i.id === instrumentId);
+  if (!row) return null;
+
+  const comparePath = path.join(getOutlookHistoryRoot() || '', 'daily-compare', `${today}.json`);
+  let actualPct = null;
+  let gapPct = null;
+  let hitDirection = null;
+  if (fs.existsSync(comparePath)) {
+    try {
+      const cmp = JSON.parse(fs.readFileSync(comparePath, 'utf8'));
+      const hit = (cmp.rows || []).find((r) => r.id === instrumentId);
+      if (hit) {
+        actualPct = hit.actualPct;
+        gapPct = hit.gapPct;
+        hitDirection = hit.hitDirection;
+      }
+    } catch {
+      // ignore
+    }
+  }
+  if (actualPct == null) {
+    const bars = readKlineBarsFromCache(instrumentId);
+    actualPct = computeDayReturnPct(bars, yday);
+    if (actualPct != null && row.predictedMid != null) {
+      gapPct = +(actualPct - row.predictedMid).toFixed(3);
+      hitDirection = computeHitFromMid(row.predictedMid, actualPct, row.predictedLow, row.predictedHigh);
+    }
+  }
+
+  return {
+    date: yday,
+    predictedMid: row.predictedMid,
+    actualPct,
+    gapPct,
+    hitDirection,
+  };
 }
 
 function todayKey(d = new Date()) {
@@ -538,6 +802,7 @@ function attachChangeDelta(inst) {
     inst.changeDelta = null;
     inst.accuracyRecords = readAccuracyRecords(inst.id, 5);
     inst.pendingPrediction = null;
+    inst.yesterdayArchive = getYesterdayArchiveCompare(inst.id);
     return inst;
   }
   const mid = extractMid(inst);
@@ -558,6 +823,7 @@ function attachChangeDelta(inst) {
     !hasResolvedPredictTs(inst.id, prev.ts) && prev.predictedMid != null
       ? { predictTs: prev.ts, predictedMid: prev.predictedMid, status: 'pending' }
       : null;
+  inst.yesterdayArchive = getYesterdayArchiveCompare(inst.id);
   return inst;
 }
 
@@ -573,4 +839,14 @@ module.exports = {
   attachChangeDelta,
   getDirectionHitRate7d,
   tryResolvePrediction,
+  todayKey,
+  dayKeyOffset,
+  getDailySummaryPath,
+  getDailyDir,
+  readDailySummary,
+  writeDailySnapshot,
+  resolveYesterdayPredictions,
+  getDailyCompare,
+  bootstrapDailyOutlook,
+  getYesterdayArchiveCompare,
 };

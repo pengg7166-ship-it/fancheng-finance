@@ -25,7 +25,7 @@ const OUTLOOK_DISK_KEY = 'commodity-outlook-v4.json';
 const OUTLOOK_DISK_TTL_MS = 60 * 1000;
 const OUTLOOK_RECOMPUTE_DEBOUNCE_MS = 800;
 const PRICE_OI_CHANGE_THRESHOLD_PCT = 0.15;
-const OUTLOOK_ENGINE_VERSION = 'v1.22.0';
+const OUTLOOK_ENGINE_VERSION = 'v1.23.0';
 
 /** 市场研判环境（条件权重，非固定） */
 const REGIME_IDS = ['riskOn', 'riskOff', 'liquidityPanic', 'supplyShock', 'weatherShock', 'neutral'];
@@ -984,6 +984,87 @@ function buildRationaleFromBreakdown(meta, breakdown, capitalAttention, newsImpa
   return `${meta.name}：${profile.supplyDemandType}品种因子均衡；${[cap, news].filter(Boolean).join(' · ') || '待更多数据'}`;
 }
 
+function buildHistoricalContext({ bars, predictedMid, regimeLabel, volRegimeLabel }) {
+  if (!bars?.length) {
+    return {
+      similarDays60: 0,
+      maxAbsReturn60: null,
+      avgAbsReturn20: null,
+      avgNextDayPct: null,
+      regimeMatchSummary: '',
+      precedentSummary: '日线不足，暂无历史对照',
+      oftenAppears: false,
+    };
+  }
+
+  const sorted = [...bars].sort((a, b) => String(a.date).localeCompare(String(b.date)));
+  const window = sorted.slice(-62);
+  const returns = [];
+  for (let i = 1; i < window.length; i += 1) {
+    const prev = window[i - 1].close;
+    const cur = window[i].close;
+    if (prev > 0 && cur > 0) {
+      const ret = +(((cur - prev) / prev) * 100).toFixed(3);
+      let nextRet = null;
+      if (i + 1 < window.length && window[i + 1].close > 0) {
+        nextRet = +(((window[i + 1].close - cur) / cur) * 100).toFixed(3);
+      }
+      returns.push({ date: String(window[i].date), ret, nextRet });
+    }
+  }
+
+  const last60Returns = returns.slice(-60);
+  const absReturns = last60Returns.map((r) => Math.abs(r.ret));
+  const maxAbsReturn60 = absReturns.length ? +Math.max(...absReturns).toFixed(3) : null;
+  const last20 = absReturns.slice(-20);
+  const avgAbsReturn20 = last20.length
+    ? +(last20.reduce((s, v) => s + v, 0) / last20.length).toFixed(3)
+    : null;
+
+  const mid = Number(predictedMid);
+  const similar = last60Returns.filter((r) => {
+    const absR = Math.abs(r.ret);
+    const target = Math.abs(mid);
+    if (Number.isNaN(target)) return false;
+    if (target < 0.05) return absR <= 0.4;
+    return absR >= target * 0.8 && absR <= target * 1.2;
+  });
+  const similarDays60 = similar.length;
+  const nextMoves = similar.map((s) => s.nextRet).filter((n) => n != null);
+  const avgNextDayPct = nextMoves.length
+    ? +(nextMoves.reduce((s, v) => s + v, 0) / nextMoves.length).toFixed(2)
+    : null;
+
+  const envLabel = [volRegimeLabel || '常态波', regimeLabel || '中性环境'].filter(Boolean).join('+');
+  const regimeMatchSummary =
+    similarDays60 > 0 && avgNextDayPct != null
+      ? `近60日类似环境(${envLabel})出现 ${similarDays60} 次，次日平均涨跌 ${avgNextDayPct >= 0 ? '+' : ''}${avgNextDayPct}%`
+      : similarDays60 > 0
+        ? `近60日类似波动幅度出现 ${similarDays60} 次`
+        : '近60日少见与预测中心相当的波动幅度';
+
+  const midText =
+    mid != null && !Number.isNaN(mid) ? `${mid >= 0 ? '+' : ''}${mid.toFixed(2)}%` : '当前预测';
+  const oftenAppears = similarDays60 >= 5;
+  const precedentSummary = oftenAppears
+    ? `历史上${similarDays60}个交易日波幅接近预测中心${midText}，属较常出现；${
+        avgNextDayPct != null
+          ? `同类情形后次日平均${avgNextDayPct >= 0 ? '上涨' : '下跌'}${Math.abs(avgNextDayPct)}%`
+          : '次日样本偏少'
+      }。`
+    : `近60日仅${similarDays60}日波幅接近${midText}，${similarDays60 <= 1 ? '属少见情形' : '偶发情形'}，需关注超预期波动。`;
+
+  return {
+    similarDays60,
+    maxAbsReturn60,
+    avgAbsReturn20,
+    avgNextDayPct,
+    regimeMatchSummary,
+    precedentSummary,
+    oftenAppears,
+  };
+}
+
 function buildPredictionRationale({
   outlookPending,
   smoothedVol,
@@ -1478,7 +1559,31 @@ function buildInstrumentRationale(meta, breakdown, capitalAttention, newsImpact,
   return buildRationaleFromBreakdown(meta, breakdown, capitalAttention, newsImpact, profile);
 }
 
-function buildTechBadges(technical, outlookPending = false) {
+function maStatusBadge(ma, price, label) {
+  if (ma == null || price == null || Number.isNaN(Number(ma)) || Number.isNaN(Number(price))) {
+    return null;
+  }
+  const above = Number(price) >= Number(ma);
+  return {
+    id: `ma-${label}`,
+    label: `${label}${above ? '上' : '下'}`,
+    trend: above ? 'up' : 'down',
+  };
+}
+
+function buildDailyStatusBadge(technical) {
+  const chg = technical.changePct ?? technical.intraday?.changePct;
+  if (chg == null || Number.isNaN(Number(chg))) return null;
+  const v = Number(chg);
+  if (Math.abs(v) < 0.08) return { id: 'daily-flat', label: '日线震荡', trend: 'flat' };
+  return {
+    id: 'daily-trend',
+    label: v > 0 ? '日线阳线' : '日线阴线',
+    trend: v > 0 ? 'up' : 'down',
+  };
+}
+
+function buildTechBadges(technical, outlookPending = false, extras = {}) {
   const badges = [];
   if (outlookPending) {
     badges.push({ id: 'pending-outlook', label: '待加载报价', trend: 'flat' });
@@ -1487,20 +1592,35 @@ function buildTechBadges(technical, outlookPending = false) {
   if (!technical.hasEnough && technical.hasLivePrice) {
     badges.push({ id: 'partial-data', label: '日线不足·用盘中+资讯', trend: 'flat' });
   }
-  if (technical.maStack?.alignmentLabel) {
-    const maLabel =
-      technical.maStack.maSpreadPct != null && Math.abs(technical.maStack.maSpreadPct) >= 0.05
-        ? `${technical.maStack.alignmentLabel} ${technical.maStack.maSpreadPct > 0 ? '+' : ''}${technical.maStack.maSpreadPct}%`
-        : technical.maStack.alignmentLabel;
-    badges.push({
-      id: 'ma',
-      label: maLabel,
-      trend: technical.maStack.alignment.includes('bull') ? 'up' : technical.maStack.alignment.includes('bear') ? 'down' : 'flat',
-    });
-    if (technical.maStack.crossLabel) {
-      badges.push({ id: 'cross', label: technical.maStack.crossLabel, trend: technical.maStack.crossSignal === 'golden' ? 'up' : 'down' });
+  const price = technical.price;
+  const ma = technical.maStack;
+  if (ma) {
+    for (const [key, label] of [
+      ['ma5', 'MA5'],
+      ['ma10', 'MA10'],
+      ['ma20', 'MA20'],
+      ['ma60', 'MA60'],
+    ]) {
+      const b = maStatusBadge(ma[key], price, label);
+      if (b) badges.push(b);
+    }
+    if (ma.alignmentLabel) {
+      badges.push({
+        id: 'ma-align',
+        label: ma.alignmentLabel,
+        trend: ma.alignment?.includes('bull') ? 'up' : ma.alignment?.includes('bear') ? 'down' : 'flat',
+      });
+    }
+    if (ma.crossLabel) {
+      badges.push({
+        id: 'cross',
+        label: ma.crossLabel,
+        trend: ma.crossSignal === 'golden' ? 'up' : 'down',
+      });
     }
   }
+  const dailyBadge = buildDailyStatusBadge(technical);
+  if (dailyBadge) badges.push(dailyBadge);
   if (technical.boll) {
     const bollLabel = technical.boll.position === 'upper' ? 'BOLL上轨' : technical.boll.position === 'lower' ? 'BOLL下轨' : 'BOLL中轨';
     badges.push({
@@ -1549,6 +1669,13 @@ function buildTechBadges(technical, outlookPending = false) {
       id: 'vol-forecast',
       label: `σ预测${sv.volForecastPct.toFixed(2)}%`,
       trend: sv.volRising ? 'up' : sv.volFalling ? 'down' : 'flat',
+    });
+  }
+  if (extras.latencyLabel) {
+    badges.push({
+      id: 'latency',
+      label: extras.latencyLabel,
+      trend: extras.latencyState === 'sync' ? 'up' : extras.latencyState === 'diverge' ? 'down' : 'flat',
     });
   }
   return badges;
@@ -1854,6 +1981,24 @@ function buildInstrumentOutlooks(sources, globalCtx = null) {
         instantScore: adaptive.instantScore,
       });
 
+      const klineBars = readCachedKlines(meta.id);
+      const historicalContext = outlookPending
+        ? {
+            similarDays60: 0,
+            maxAbsReturn60: null,
+            avgAbsReturn20: null,
+            avgNextDayPct: null,
+            regimeMatchSummary: '',
+            precedentSummary: '行情待加载，历史对照暂不可用',
+            oftenAppears: false,
+          }
+        : buildHistoricalContext({
+            bars: klineBars,
+            predictedMid: nextDayRangePct?.mid,
+            regimeLabel,
+            volRegimeLabel: technical.smoothedVol?.regimeLabel,
+          });
+
       const row = {
         id: meta.id,
         name: meta.name,
@@ -1893,7 +2038,12 @@ function buildInstrumentOutlooks(sources, globalCtx = null) {
         short: horizons.short,
         medium: horizons.medium,
         long: horizons.long,
-        techBadges: buildTechBadges(technical, outlookPending),
+        techBadges: buildTechBadges(technical, outlookPending, {
+          latencyLabel: adaptive.latencyLabel,
+          latencyState: adaptive.latencyState,
+        }),
+        historicalContext,
+        rationaleSummary: (predictionRationale || '').split('\n')[0]?.slice(0, 48) || '',
         factors,
         factorBreakdown,
         factorBreakdownDisplay,
@@ -2047,10 +2197,12 @@ async function fetchCommodityOutlookSource(sources) {
   const hist = outlookHistory.recordOutlookSnapshots(payload.instruments, {
     dataVersion: lastOutlookDataVersion,
   });
+  outlookHistory.bootstrapDailyOutlook(payload.instruments);
   payload.historyArchivePath = hist.root;
   payload.stats = payload.stats || {};
   payload.stats.todayArchiveCount = outlookHistory.countTodayArchiveEntries();
   payload.stats.directionHitRate7d = outlookHistory.getDirectionHitRate7d();
+  payload.stats.dailySnapshotPath = outlookHistory.getDailySummaryPath();
   diskCache.write(OUTLOOK_DISK_KEY, { data: payload, savedAt: Date.now() });
   return payload;
 }
@@ -2156,5 +2308,6 @@ module.exports = {
   starsToHtml,
   formatJudgementTime,
   buildPredictionRationale,
+  buildHistoricalContext,
   OUTLOOK_ENGINE_VERSION,
 };
