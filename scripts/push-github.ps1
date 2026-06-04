@@ -2,8 +2,7 @@
 # 用法：.\scripts\push-github.ps1 -GitHubUser 你的GitHub用户名
 
 param(
-  [Parameter(Mandatory = $true)]
-  [string]$GitHubUser,
+  [string]$GitHubUser = 'gaotianze',
   [string]$RepoName = 'fancheng-finance'
 )
 
