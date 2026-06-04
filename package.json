@@ -1,12 +1,59 @@
 {
   "name": "fancheng-finance",
   "productName": "梵澄金融",
-  "version": "1.13.1",
+  "version": "1.13.2",
   "description": "全球指数、大宗商品、美联储、日本央行、美国财政部、新华社实时信息聚合桌面应用",
   "main": "electron/main.js",
   "author": "",
   "license": "MIT",
+  "scripts": {
+    "start": "electron .",
+    "build": "electron-builder --win --dir",
+    "postinstall": "node scripts/download-electron.js"
+  },
   "dependencies": {
     "rss-parser": "^3.13.0"
+  },
+  "devDependencies": {
+    "electron": "^33.2.1",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "com.fancheng.finance",
+    "productName": "梵澄金融",
+    "directories": {
+      "output": "dist-build"
+    },
+    "files": [
+      "electron/**/*",
+      "services/**/*",
+      "src/**/*",
+      "scripts/download-electron.js",
+      "scripts/create-shortcuts.js",
+      "scripts/sync-dist-out.js",
+      "package.json",
+      "index.html",
+      "app.js",
+      "styles.css",
+      "assets/**/*",
+      "*.bat",
+      "update-shortcuts.ps1",
+      "node_modules/**/*",
+      "!node_modules/@types/**",
+      "!node_modules/typescript/**",
+      "!**/_*.js",
+      "!dist/**",
+      "!dist-*/**",
+      "!dist-build/**",
+      "!dist-out/**",
+      "!dist-new/**",
+      "!_asar-*/**",
+      "!_pkg-extract/**"
+    ],
+    "win": {
+      "target": "dir",
+      "executableName": "FanchengFinance"
+    },
+    "asar": true
   }
 }
