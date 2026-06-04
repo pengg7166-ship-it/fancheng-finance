@@ -174,6 +174,14 @@ function computeVolumeRatio(bars) {
   const avgVol = prev5.reduce((s, b) => s + (b.volume || 0), 0) / prev5.length;
   if (!avgVol || avgVol <= 0) return null;
   const ratio = last.volume / avgVol;
+
+  let ratio20 = ratio;
+  if (bars.length >= 21) {
+    const prev20 = bars.slice(-21, -1);
+    const avg20 = prev20.reduce((s, b) => s + (b.volume || 0), 0) / prev20.length;
+    if (avg20 > 0) ratio20 = last.volume / avg20;
+  }
+
   let label = '平量';
   if (ratio >= 1.5) label = '放量';
   else if (ratio >= 1.15) label = '温和放量';
@@ -181,6 +189,7 @@ function computeVolumeRatio(bars) {
   else if (ratio <= 0.85) label = '温和缩量';
   return {
     ratio: +ratio.toFixed(3),
+    ratio20: +ratio20.toFixed(3),
     label,
     todayVolume: last.volume || 0,
     avg5Volume: +avgVol.toFixed(0),
@@ -319,14 +328,22 @@ function hasCachedDayKlines(commodityId, minBars = 20) {
   return readCachedKlines(commodityId).length >= minBars;
 }
 
+function formatOiDisplay(n) {
+  if (n == null || Number.isNaN(n)) return null;
+  if (n >= 10000) return `${(n / 10000).toFixed(1)}万手`;
+  return `${Math.round(n)}手`;
+}
+
 function updateOiSnapshot(commodityId, openInterest) {
   const key = `${OI_SNAP_PREFIX}${commodityId}.json`;
   const prev = diskCache.readStale(key);
   const prevOi = prev?.data?.openInterest;
-  if (openInterest != null && !Number.isNaN(openInterest) && openInterest > 0) {
+  const oiValid = openInterest != null && !Number.isNaN(openInterest) && openInterest > 0;
+
+  if (oiValid) {
     diskCache.write(key, { data: { openInterest, savedAt: Date.now() } });
   }
-  if (prevOi != null && openInterest != null && prevOi > 0) {
+  if (prevOi != null && oiValid && prevOi > 0) {
     const deltaPct = ((openInterest - prevOi) / prevOi) * 100;
     let label = '持仓平稳';
     if (deltaPct >= 3) label = '明显增仓';
@@ -337,15 +354,27 @@ function updateOiSnapshot(commodityId, openInterest) {
       current: openInterest,
       previous: prevOi,
       deltaPct: +deltaPct.toFixed(3),
+      display: formatOiDisplay(openInterest),
       label,
       score: clamp(deltaPct / 8, -0.6, 0.6),
     };
   }
+  if (oiValid) {
+    return {
+      current: openInterest,
+      previous: prevOi ?? null,
+      deltaPct: null,
+      display: formatOiDisplay(openInterest),
+      label: `持仓 ${formatOiDisplay(openInterest)}`,
+      score: 0,
+    };
+  }
   return {
-    current: openInterest ?? null,
+    current: null,
     previous: prevOi ?? null,
     deltaPct: null,
-    label: openInterest > 0 ? '持仓基准建立中' : '持仓0%',
+    display: null,
+    label: '持仓待更新',
     score: 0,
   };
 }

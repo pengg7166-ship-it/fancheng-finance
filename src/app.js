@@ -2815,36 +2815,74 @@ function renderOutlookTechBadge(b) {
   return `<span class="outlook-tech-badge ${trendClass}">${escapeHtml(b.label || '')}</span>`;
 }
 
+function renderOutlookFactorBreakdownTable(inst) {
+  const rows = inst.factorBreakdownDisplay || inst.factors?.factorBreakdownDisplay || [];
+  if (!rows.length) return '';
+  const maxAbs = Math.max(...rows.map((r) => Math.abs(r.value)), 0.01);
+  const tableRows = rows
+    .map((r) => {
+      const pct = Math.round((Math.abs(r.value) / maxAbs) * 100);
+      const barClass = r.value >= 0 ? 'outlook-factor-bar-pos' : 'outlook-factor-bar-neg';
+      return `<tr class="outlook-factor-row">
+        <td class="outlook-factor-name">${escapeHtml(r.label)}</td>
+        <td class="outlook-factor-val ${r.value >= 0 ? 'pos' : 'neg'}">${escapeHtml(r.display)}</td>
+        <td class="outlook-factor-bar-cell"><span class="outlook-factor-bar ${barClass}" style="width:${pct}%"></span></td>
+      </tr>`;
+    })
+    .join('');
+  return `<table class="outlook-factor-table"><thead><tr><th>因子</th><th>贡献</th><th></th></tr></thead><tbody>${tableRows}</tbody></table>`;
+}
+
+function renderOutlookCapitalBadge(inst) {
+  const cap = inst.capitalAttention || inst.factors?.capitalAttention;
+  if (cap?.score == null) return '<span class="outlook-cap-badge outlook-cap-flat">—</span>';
+  const score = cap?.score ?? 0;
+  const tier = score >= 75 ? 'high' : score >= 50 ? 'mid' : 'low';
+  const subs = cap.subMetrics || {};
+  const subParts = [
+    subs.volumeRatio5d != null ? `量比5d ${subs.volumeRatio5d}` : '',
+    subs.oiChangePct != null ? `持仓${subs.oiChangePct > 0 ? '+' : ''}${subs.oiChangePct}%` : '',
+    subs.intradayRangePct != null ? `振幅${subs.intradayRangePct}%` : '',
+  ].filter(Boolean);
+  return `<span class="outlook-cap-badge outlook-cap-${tier}" title="${escapeAttr(subParts.join(' · '))}">资金关注 ${score}/100</span>`;
+}
+
 function renderOutlookInstrumentDetail(inst) {
   const f = inst.factors || {};
   const newsHits = (f.news?.hits || [])
     .map(
       (h) =>
-        `<li class="outlook-news-hit ${outlookDirectionClass(h.direction)}"><span class="outlook-news-dir">${escapeHtml(h.direction === 'bullish' ? '↑' : h.direction === 'bearish' ? '↓' : '→')}</span> ${escapeHtml(h.title || '')} <span class="outlook-news-src">${escapeHtml(h.source || '')}</span></li>`
+        `<li class="outlook-news-hit ${outlookDirectionClass(h.direction)}"><span class="outlook-news-dir">${escapeHtml(h.direction === 'bullish' ? '↑' : h.direction === 'bearish' ? '↓' : '→')}</span> ${escapeHtml(h.title || '')} <span class="outlook-news-src">${escapeHtml(h.source || '')}${h.bucket ? ` · ${escapeHtml(h.bucket)}` : ''}</span></li>`
     )
     .join('');
-  const newsHeadline =
-    f.news?.hits?.[0]?.title != null
-      ? `<p class="outlook-news-top">${escapeHtml(String(f.news.hitCount || f.news.hits.length))} 条命中 · ${escapeHtml(f.news.hits[0].title.slice(0, 72))}${f.news.hits[0].title.length > 72 ? '…' : ''}</p>`
-      : `<p class="outlook-news-top">${escapeHtml(String(f.news?.hitCount ?? 0))} 条命中 · 综合分 ${f.news?.score != null ? (f.news.score >= 0 ? '+' : '') + Number(f.news.score).toFixed(2) : '0.00'}</p>`;
-  const macroRows = (f.macro?.factors || [])
-    .map(
-      (mf) =>
-        `<span class="outlook-macro-chip ${outlookDirectionClass(mf.direction)}">${escapeHtml(mf.label)} ${escapeHtml(mf.score > 0 ? '+' : '')}${Number(mf.score).toFixed(2)}</span>`
-    )
-    .join('');
+  const newsHeadline = f.news?.topTitle || f.news?.hits?.[0]?.title
+    ? `<p class="outlook-news-top">资讯冲击 ${escapeHtml(f.news.shockDisplay || f.news.summary || '')} · ${escapeHtml(String(f.news.hitCount || 0))} 条命中 · ${escapeHtml((f.news.topTitle || f.news.hits[0].title).slice(0, 72))}${(f.news.topTitle || f.news.hits[0].title).length > 72 ? '…' : ''}</p>`
+    : `<p class="outlook-news-top">${escapeHtml(f.news?.summary || '暂无资讯命中')}</p>`;
   const tech = f.technical || {};
   const ma = tech.maStack || {};
   const boll = tech.boll || {};
   const vol = f.volume || {};
   const oi = f.oi || {};
+  const cap = inst.capitalAttention || f.capitalAttention;
+  const profile = f.profile || {};
 
   return `<div class="outlook-instrument-detail" hidden>
     <p class="outlook-rationale">${escapeHtml(inst.rationale || '')}</p>
+    ${inst.profileSummary ? `<p class="outlook-profile-summary">${escapeHtml(inst.profileSummary)}</p>` : ''}
     <div class="outlook-detail-grid">
       <div class="outlook-detail-block">
-        <h5>宏观因子（${escapeHtml(inst.bucket || '')}）</h5>
-        <div class="outlook-macro-chips">${macroRows || '—'}</div>
+        <h5>因子贡献分解</h5>
+        ${renderOutlookFactorBreakdownTable(inst)}
+      </div>
+      <div class="outlook-detail-block">
+        <h5>资金关注 ${cap?.score != null ? `${cap.score}/100` : '—'}</h5>
+        <ul class="outlook-indicator-list">
+          <li>量比5日：${cap?.subMetrics?.volumeRatio5d ?? vol.ratio ?? '—'}</li>
+          <li>量比20日：${cap?.subMetrics?.volumeRatio20d ?? '—'}</li>
+          <li>持仓变化：${cap?.subMetrics?.oiChangePct != null ? `${cap.subMetrics.oiChangePct > 0 ? '+' : ''}${cap.subMetrics.oiChangePct}%` : oi.deltaPct != null ? `${oi.deltaPct > 0 ? '+' : ''}${oi.deltaPct}%` : oi.display || '—'}</li>
+          <li>成交额代理：${cap?.subMetrics?.turnoverProxy != null ? cap.subMetrics.turnoverProxy.toLocaleString('zh-CN') : '—'}</li>
+          <li>盘中振幅：${cap?.subMetrics?.intradayRangePct ?? '—'}%</li>
+        </ul>
       </div>
       <div class="outlook-detail-block">
         <h5>技术指标</h5>
@@ -2852,12 +2890,12 @@ function renderOutlookInstrumentDetail(inst) {
           <li>MA5/10/20/60：${[ma.ma5, ma.ma10, ma.ma20, ma.ma60].map((v) => (v != null ? Number(v).toFixed(1) : '—')).join(' / ')}</li>
           <li>BOLL：上 ${boll.upper ?? '—'} · 中 ${boll.mid ?? '—'} · 下 ${boll.lower ?? '—'} · 带宽 ${boll.bandwidth ?? '—'}%</li>
           <li>量比：${vol.ratio ?? '—'}（${escapeHtml(vol.label || '—')}）</li>
-          <li>持仓变化：${oi.deltaPct != null ? `${oi.deltaPct > 0 ? '+' : ''}${oi.deltaPct}%` : '—'}（${escapeHtml(oi.label || '—')}）</li>
-          <li>K线样本：${tech.dataPoints ?? 0} 根${tech.hasEnough ? '' : '（≥20 根时 BOLL 完整生效）'}</li>
+          <li>持仓：${oi.display || (oi.deltaPct != null ? `${oi.deltaPct > 0 ? '+' : ''}${oi.deltaPct}%` : '—')}（${escapeHtml(oi.label || '—')}）</li>
+          <li>品种特性：${escapeHtml(profile.volatilityTier || '—')} · ${escapeHtml(profile.supplyDemandType || '—')}</li>
         </ul>
       </div>
       <div class="outlook-detail-block">
-        <h5>新闻命中</h5>
+        <h5>资讯命中</h5>
         ${newsHeadline}
         <ul class="outlook-news-hits">${newsHits || '<li class="outlook-news-hit">暂无 headline</li>'}</ul>
       </div>
@@ -2897,11 +2935,13 @@ function renderOutlookInstrumentRow(inst) {
         <span class="outlook-range-bias">${escapeHtml(formatOutlookRangeSubtext(range))}</span>
         ${range.rangeCapped ? `<span class="outlook-range-capped" title="${escapeAttr(formatOutlookRangeCappedNote(range))}">已校准</span>` : ''}
       </div>
+      <div class="outlook-inst-col outlook-inst-cap">
+        ${renderOutlookCapitalBadge(inst)}
+      </div>
       <div class="outlook-inst-col outlook-inst-dir">
         <span class="outlook-dir-arrow">${escapeHtml(inst.directionArrow || '→')}</span>
         <span class="outlook-dir-label">${escapeHtml(inst.directionLabel || '震荡')}</span>
         <span class="outlook-composite-score" title="综合分">${escapeHtml(inst.compositeScoreDisplay || (inst.compositeScore != null ? `${inst.compositeScore >= 0 ? '+' : ''}${Number(inst.compositeScore).toFixed(2)}` : ''))}</span>
-        <span class="outlook-stars">${escapeHtml(inst.starsHtml || '')}</span>
       </div>
       <div class="outlook-inst-col outlook-inst-badges">${badges || '<span class="outlook-tech-badge outlook-badge-flat">待数据</span>'}</div>
       <span class="outlook-expand-icon" aria-hidden="true">▸</span>
@@ -3190,7 +3230,7 @@ function renderOutlookPanel(source) {
         </div>
         ${renderOutlookSectorTabs(sectors, outlookSectorFilter, sectorCounts)}
         <div class="outlook-instrument-head-row" aria-hidden="true">
-          <span>品种</span><span>现价</span><span>次日区间</span><span>方向</span><span>技术标签</span><span></span>
+          <span>品种</span><span>现价</span><span>次日区间</span><span>资金关注</span><span>方向·综合分</span><span>技术标签</span><span></span>
         </div>
         <div class="outlook-instrument-list" data-outlook-instrument-count="${instruments.length}">${instrumentRows}</div>
         <p class="outlook-sector-empty empty-state" hidden>当前板块暂无品种数据</p>
@@ -3203,7 +3243,7 @@ function renderOutlookPanel(source) {
         <h3 class="outlook-section-title">四大类 outlook 参考</h3>
         <div class="outlook-category-grid">${categoryCards}</div>
       </section>
-      <p class="policy-note outlook-note">v1.17.1 历史波动校准次日区间 · 六板块 ${instruments.length} 品种 · σ20/ATR/p90 · 仅供参考</p>
+      <p class="policy-note outlook-note">v1.18.0 品种档案因子分解 · 资金关注 · 六板块 ${instruments.length} 品种 · 仅供参考</p>
     </div>
   </div>`;
 }

@@ -1294,7 +1294,7 @@
 
 .outlook-instrument-head-row {
   display: grid;
-  grid-template-columns: minmax(108px, 1.15fr) minmax(96px, 1fr) minmax(120px, 1.25fr) minmax(72px, 0.75fr) minmax(140px, 1.5fr) 1.5rem;
+  grid-template-columns: minmax(108px, 1.15fr) minmax(96px, 1fr) minmax(120px, 1.25fr) minmax(88px, 0.85fr) minmax(88px, 0.85fr) minmax(120px, 1.2fr) 1.5rem;
   gap: 8px;
   padding: 6px 12px;
   font-size: 12px;
@@ -1362,7 +1362,7 @@
 
 .outlook-instrument-main {
   display: grid;
-  grid-template-columns: minmax(108px, 1.15fr) minmax(96px, 1fr) minmax(120px, 1.25fr) minmax(72px, 0.75fr) minmax(140px, 1.5fr) 1.5rem;
+  grid-template-columns: minmax(108px, 1.15fr) minmax(96px, 1fr) minmax(120px, 1.25fr) minmax(88px, 0.85fr) minmax(88px, 0.85fr) minmax(120px, 1.2fr) 1.5rem;
   gap: 8px;
   align-items: center;
   width: 100%;
@@ -1571,6 +1571,91 @@
   font-size: 0.68rem;
   color: #64748b;
   font-style: italic;
+}
+
+.outlook-profile-summary {
+  margin: 0 0 0.5rem;
+  font-size: 0.72rem;
+  color: #94a3b8;
+}
+
+.outlook-cap-badge {
+  display: inline-block;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-variant-numeric: tabular-nums;
+}
+
+.outlook-cap-high {
+  color: #fbbf24;
+  background: rgba(251, 191, 36, 0.12);
+}
+
+.outlook-cap-mid {
+  color: #94a3b8;
+  background: rgba(148, 163, 184, 0.1);
+}
+
+.outlook-cap-low {
+  color: #64748b;
+  background: rgba(100, 116, 139, 0.08);
+}
+
+.outlook-cap-flat {
+  color: #64748b;
+}
+
+.outlook-factor-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.72rem;
+}
+
+.outlook-factor-table th,
+.outlook-factor-table td {
+  padding: 3px 6px;
+  text-align: left;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.12);
+}
+
+.outlook-factor-name {
+  color: #cbd5e1;
+  white-space: nowrap;
+}
+
+.outlook-factor-val {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  width: 3.5rem;
+}
+
+.outlook-factor-val.pos {
+  color: #4ade80;
+}
+
+.outlook-factor-val.neg {
+  color: #f87171;
+}
+
+.outlook-factor-bar-cell {
+  width: 40%;
+}
+
+.outlook-factor-bar {
+  display: block;
+  height: 4px;
+  border-radius: 2px;
+  min-width: 2px;
+}
+
+.outlook-factor-bar-pos {
+  background: #4ade80;
+}
+
+.outlook-factor-bar-neg {
+  background: #f87171;
 }
 
 .outlook-section-secondary .outlook-category-grid {

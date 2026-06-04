@@ -26,7 +26,11 @@ function parseSinaFuturesLine(raw) {
   const ask = parseFloat(parts[7]);
   let price = parseFloat(parts[8]);
   const prevSettle = parseFloat(parts[10]);
-  const openInterest = parseFloat(parts[13]);
+  let openInterest = parseFloat(parts[13]);
+  if (Number.isNaN(openInterest) || openInterest <= 0) {
+    const altOi = parseFloat(parts[12]);
+    if (!Number.isNaN(altOi) && altOi > 0) openInterest = altOi;
+  }
   const volume = parseFloat(parts[14]);
   const tradeDate = parts[17] || parts[18] || '';
 

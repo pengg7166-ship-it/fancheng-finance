@@ -114,15 +114,23 @@ app.whenReady().then(async () => {
   const hasCommodities = Boolean(getCachedAllData()?.sources?.commodities?.exchanges?.some((e) => e.items?.length));
   const noPendingDirection = !hasCommodities || firstThree.every((i) => !String(i?.directionLabel || '').includes('研判积累中'));
   const auInst = (engineProbe.instruments || []).find((i) => String(i.id).toLowerCase() === 'au');
+  const cuInst = (engineProbe.instruments || []).find((i) => String(i.id).toLowerCase() === 'cu');
+  const saInst = (engineProbe.instruments || []).find((i) => String(i.id).toLowerCase() === 'sa');
   const auRange = auInst?.nextDayRangePct;
   const auRangeSpan = auRange ? Number(auRange.high) - Number(auRange.low) : null;
   const auRangeOk = auRangeSpan == null || auRangeSpan <= 1.5;
+  const factorSig = (inst) => JSON.stringify(inst?.factorBreakdown || {});
+  const factorBreakdownDistinct =
+    auInst?.factorBreakdown &&
+    cuInst?.factorBreakdown &&
+    saInst?.factorBreakdown &&
+    (factorSig(auInst) !== factorSig(cuInst) || factorSig(cuInst) !== factorSig(saInst));
   if (auRangeSpan != null && !auRangeOk) {
     console.error(`[diagnose] au next-day range span ${auRangeSpan.toFixed(2)}% exceeds 1.5% cap`);
   }
-  if (firstThree.length >= 3 && hasCommodities && (!rangesDistinct || !scoresDistinct || !noPendingDirection || !auRangeOk)) {
+  if (firstThree.length >= 3 && hasCommodities && (!rangesDistinct || !scoresDistinct || !noPendingDirection || !auRangeOk || !factorBreakdownDistinct)) {
     console.error(
-      `[diagnose] outlook diversity check FAILED rangesDistinct=${rangesDistinct} scoresDistinct=${scoresDistinct} noPendingDirection=${noPendingDirection} auRangeOk=${auRangeOk} auSpan=${auRangeSpan}`
+      `[diagnose] outlook diversity check FAILED rangesDistinct=${rangesDistinct} scoresDistinct=${scoresDistinct} noPendingDirection=${noPendingDirection} auRangeOk=${auRangeOk} factorBreakdownDistinct=${factorBreakdownDistinct} auSpan=${auRangeSpan}`
     );
   }
   console.log(
@@ -224,6 +232,10 @@ app.whenReady().then(async () => {
         outlookNoPendingDirection: noPendingDirection,
         auRangeSpan,
         auRangeOk,
+        factorBreakdownDistinct,
+        auFactorBreakdown: auInst?.factorBreakdown,
+        cuFactorBreakdown: cuInst?.factorBreakdown,
+        saFactorBreakdown: saInst?.factorBreakdown,
         ipcInstrumentCount: ipcOutlook?.instruments?.length || 0,
         result,
         consoleErrors: logs,
