@@ -221,11 +221,19 @@ app.whenReady().then(async () => {
       const outlookText = outlookPanel?.innerText || '';
       const firstRow = outlookPanel?.querySelector('.outlook-instrument-row');
       const firstTitle = firstRow?.querySelector('.outlook-inst-title');
-      const firstPrice = firstRow?.querySelector('.outlook-inst-price');
+      const firstPriceBox = firstRow?.querySelector('.outlook-price-box');
+      const firstChgBox = firstRow?.querySelector('.outlook-chg-box');
+      const firstPredSmooth = firstRow?.querySelector('.outlook-pred-smooth');
+      const firstPredExtreme = firstRow?.querySelector('.outlook-pred-extreme');
       const firstPredBox = firstRow?.querySelector('.outlook-pred-box');
-      const firstRationale = outlookPanel?.querySelector('.outlook-prediction-rationale');
+      firstRow?.querySelector('.outlook-instrument-main')?.click();
+      await new Promise((r) => setTimeout(r, 800));
+      const detailPanel = outlookPanel?.querySelector('.outlook-detail-panel:not([hidden])');
+      const firstRationale = detailPanel?.querySelector('.outlook-prediction-rationale') || outlookPanel?.querySelector('.outlook-prediction-rationale');
+      const accuracyTable = detailPanel?.querySelector('.outlook-accuracy-table');
       const titleLen = firstTitle?.textContent?.trim().length || 0;
-      const priceText = firstPrice?.textContent?.trim() || '';
+      const priceText = firstPriceBox?.textContent?.trim() || '';
+      const chgText = firstChgBox?.textContent?.trim() || '';
       const predText = firstPredBox?.textContent?.trim() || '';
       const rationaleText = firstRationale?.textContent?.trim() || '';
       const titleFontPx = firstTitle ? parseFloat(getComputedStyle(firstTitle).fontSize) : 0;
@@ -252,11 +260,18 @@ app.whenReady().then(async () => {
           priceText: priceText.slice(0, 40),
           predText: predText.slice(0, 60),
           predBoxesVisible: Boolean(firstPredBox),
+          predSmoothVisible: Boolean(firstPredSmooth),
+          predExtremeVisible: Boolean(firstPredExtreme),
+          priceBoxVisible: Boolean(firstPriceBox),
+          chgBoxVisible: Boolean(firstChgBox),
+          detailPanelVisible: Boolean(detailPanel),
+          accuracyTableVisible: Boolean(accuracyTable),
           predFontPx,
           predLegible: predFontPx >= 13 && !blurOnPred,
           rationaleLen: rationaleText.length,
           rationaleOk: rationaleText.length > 20 && !/研判积累中/.test(rationaleText),
           hasPriceOrPredText: /[\d.%+]/.test(priceText) || /[%~±]/.test(predText),
+          chgText: chgText.slice(0, 20),
         },
         errorBanner: document.getElementById('errorBanner')?.innerText,
         version: document.getElementById('appVersion')?.textContent,
