@@ -25,7 +25,7 @@ const OUTLOOK_DISK_KEY = 'commodity-outlook-v4.json';
 const OUTLOOK_DISK_TTL_MS = 60 * 1000;
 const OUTLOOK_RECOMPUTE_DEBOUNCE_MS = 800;
 const PRICE_OI_CHANGE_THRESHOLD_PCT = 0.15;
-const OUTLOOK_ENGINE_VERSION = 'v1.20.0';
+const OUTLOOK_ENGINE_VERSION = 'v1.21.1';
 
 /** 市场研判环境（条件权重，非固定） */
 const REGIME_IDS = ['riskOn', 'riskOff', 'liquidityPanic', 'supplyShock', 'weatherShock', 'neutral'];
@@ -984,6 +984,75 @@ function buildRationaleFromBreakdown(meta, breakdown, capitalAttention, newsImpa
   return `${meta.name}：${profile.supplyDemandType}品种因子均衡；${[cap, news].filter(Boolean).join(' · ') || '待更多数据'}`;
 }
 
+function buildPredictionRationale({
+  outlookPending,
+  smoothedVol,
+  nextDayRangePct,
+  scenarios,
+  newsImpact,
+  capitalAttention,
+  latencyLabel,
+  latencyState,
+  changePct,
+  instantScore,
+}) {
+  if (outlookPending) return '现价待加载，预测依据将在行情接入后生成';
+
+  const sv = smoothedVol || {};
+  const sigma = sv.sigma20 ?? nextDayRangePct?.histVol20d;
+  const regime = sv.regimeLabel || '常态波';
+  const pct60 = sv.percentile != null ? `${Math.round(sv.percentile)}%分位` : '';
+  const emaPart =
+    sv.volEma10 != null && sv.volEma20 != null
+      ? `EMA10/20 ${sv.volEma10.toFixed(2)}/${sv.volEma20.toFixed(2)}%`
+      : sv.volForecastPct != null
+        ? `平滑预测${sv.volForecastPct.toFixed(2)}%`
+        : '';
+
+  const newsCount = newsImpact?.hitCount || 0;
+  const topTitle = (newsImpact?.topTitle || newsImpact?.hits?.[0]?.title || '').trim().slice(0, 28);
+  const highStars = countHighStarNewsHits(newsImpact);
+  const capScore = capitalAttention?.score;
+  const volPm = nextDayRangePct?.expectedMovePct ?? nextDayRangePct?.halfWidth;
+  const chg =
+    changePct != null && !Number.isNaN(Number(changePct))
+      ? `即时盘面${changePct >= 0 ? '+' : ''}${Number(changePct).toFixed(2)}%`
+      : '';
+  const latency = latencyLabel || latencyState || '';
+  const instant =
+    instantScore != null ? `即时分${instantScore >= 0 ? '+' : ''}${Number(instantScore).toFixed(2)}` : '';
+
+  let stressNote = '极端情景未触发';
+  if (scenarios?.stress) {
+    const span = Number(scenarios.stress.high) - Number(scenarios.stress.low);
+    stressNote = scenarios.stressTriggered
+      ? `极端已触发·跨度${span.toFixed(2)}%`
+      : `极端缓冲+${(highStars * 0.3).toFixed(1)}%资讯`;
+  } else if (highStars >= 1) {
+    stressNote = `高星${highStars}条·极端缓冲`;
+  }
+
+  const parts = [
+    '依据',
+    sigma != null ? `近20日σ${sigma.toFixed(2)}%` : null,
+    `当前${regime}`,
+    emaPart,
+    pct60 ? `60日${pct60}` : null,
+    newsCount ? `资讯${newsCount}条${topTitle ? `·${topTitle}` : ''}` : '无高星突发',
+    capScore != null ? `资金关注${capScore}/100` : null,
+    latency ? `${latency}` : null,
+    chg,
+    instant,
+    chg ? '已反映' : null,
+    volPm != null ? `预测波动±${Number(volPm).toFixed(2)}%` : null,
+    stressNote,
+  ].filter(Boolean);
+
+  let text = parts.join('；');
+  if (text.length > 200) text = `${text.slice(0, 197)}…`;
+  return text;
+}
+
 function buildMacroScoresForInstrument(sources, bucketId) {
   const bucketScores = buildBucketFactorScores(sources, bucketId);
   const chinaPolicy = scoreSupplyPolicy(sources.policy?.items, bucketId);
@@ -1741,6 +1810,19 @@ function buildInstrumentOutlooks(sources, globalCtx = null) {
         ? `${meta.name}：现价待加载；${mergedQuote.priceReason || '行情未接入'}`
         : `${buildInstrumentRationale(meta, factorBreakdown, capitalAttention, newsImpact, profile)}；${adaptive.rationaleSuffix}`;
 
+      const predictionRationale = buildPredictionRationale({
+        outlookPending,
+        smoothedVol: technical.smoothedVol,
+        nextDayRangePct,
+        scenarios,
+        newsImpact,
+        capitalAttention,
+        latencyLabel: adaptive.latencyLabel,
+        latencyState: adaptive.latencyState,
+        changePct: mergedQuote.changePct,
+        instantScore: adaptive.instantScore,
+      });
+
       const row = {
         id: meta.id,
         name: meta.name,
@@ -1785,6 +1867,7 @@ function buildInstrumentOutlooks(sources, globalCtx = null) {
         factorBreakdown,
         factorBreakdownDisplay,
         rationale,
+        predictionRationale,
         sourceNote: technical.sourceNote,
         profileSummary: `${profile.volatilityTier}波动 · ${profile.supplyDemandType} · ${profile.tradingSession} · ${regimeLabel}`,
         wInstant: adaptive.wInstant,
@@ -1936,6 +2019,7 @@ async function fetchCommodityOutlookSource(sources) {
   payload.historyArchivePath = hist.root;
   payload.stats = payload.stats || {};
   payload.stats.todayArchiveCount = outlookHistory.countTodayArchiveEntries();
+  payload.stats.directionHitRate7d = outlookHistory.getDirectionHitRate7d();
   diskCache.write(OUTLOOK_DISK_KEY, { data: payload, savedAt: Date.now() });
   return payload;
 }
@@ -2040,5 +2124,6 @@ module.exports = {
   directionLabel,
   starsToHtml,
   formatJudgementTime,
+  buildPredictionRationale,
   OUTLOOK_ENGINE_VERSION,
 };

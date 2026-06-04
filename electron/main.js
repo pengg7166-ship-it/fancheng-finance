@@ -7,7 +7,7 @@ const config = require('../services/config');
 const { warmAllCaches, getStartupSnapshot, getPushStartupPayload, prefetchAfterStartup, flushAllCaches } = require('../services/cache-store');
 const { localizeErrorMessage } = require('../services/translate');
 const { fetchIndexHistory, refreshIndexKline, listIndicesWithHistory } = require('../services/history-fetcher');
-const { fetchCommoditiesLive } = require('../services/commodities-fetcher');
+const { fetchCommoditiesLive, refreshCommoditiesLiveInBackground } = require('../services/commodities-fetcher');
 const {
   fetchCommodityHistory,
   refreshCommodityKline,
@@ -56,6 +56,18 @@ function hashCentralBankPayload(data) {
   if (!data) return '';
   const stamp = data.liveRefreshedAt || data.updatedAt || '';
   return `${stamp}|${data.news?.length || 0}|${data.speeches?.length || 0}|${data.indicators?.length || 0}`;
+}
+
+function hashCommoditiesPayload(data) {
+  if (!data?.exchanges?.length) return '';
+  const stamp = data.fetchedAt || data.liveRefreshedAt || '';
+  const items = data.exchanges.flatMap((ex) => ex.items || []);
+  const priceSig = items
+    .filter((i) => i.price != null)
+    .slice(0, 12)
+    .map((i) => `${i.id}:${i.price}:${i.changePct}`)
+    .join('|');
+  return `${stamp}|${items.length}|${priceSig}`;
 }
 
 function pushToRenderer(channel, data, hashFn) {
@@ -116,7 +128,7 @@ function makePushTick(fetchFn, refreshFn, pushFn) {
     try {
       try {
         const data = await fetchFn({ force: false });
-        if (data?.pairs?.length || data?.items?.length || hasCentralBankPayload(data)) {
+        if (hasLivePushPayload(data)) {
           pushFn(data);
           return;
         }
@@ -124,7 +136,7 @@ function makePushTick(fetchFn, refreshFn, pushFn) {
         // fall through to background refresh
       }
       const data = await refreshFn();
-      if (data?.pairs?.length || data?.items?.length || hasCentralBankPayload(data)) {
+      if (hasLivePushPayload(data)) {
         pushFn(data);
       }
     } catch {
@@ -197,6 +209,7 @@ function makeCentralBankPushTick() {
 }
 
 const pushCycleSteps = [
+  { name: 'commodities', run: null },
   { name: 'forex', run: null },
   { name: 'policy', run: null },
   { name: 'geopolitics', run: null },
@@ -206,20 +219,25 @@ const pushCycleSteps = [
 ];
 
 function initPushCycleSteps() {
-  pushCycleSteps[0].run = makePushTick(fetchForexLive, refreshForexLiveInBackground, pushForexLiveToRenderer);
-  pushCycleSteps[1].run = makePushTick(fetchPolicyLive, refreshPolicyLiveInBackground, pushPolicyLiveToRenderer);
-  pushCycleSteps[2].run = makePushTick(
+  pushCycleSteps[0].run = makePushTick(
+    fetchCommoditiesLive,
+    refreshCommoditiesLiveInBackground,
+    pushCommoditiesLiveToRenderer
+  );
+  pushCycleSteps[1].run = makePushTick(fetchForexLive, refreshForexLiveInBackground, pushForexLiveToRenderer);
+  pushCycleSteps[2].run = makePushTick(fetchPolicyLive, refreshPolicyLiveInBackground, pushPolicyLiveToRenderer);
+  pushCycleSteps[3].run = makePushTick(
     fetchGeopoliticsLive,
     refreshGeopoliticsInBackground,
     pushGeopoliticsLiveToRenderer
   );
-  pushCycleSteps[3].run = makePushTick(fetchClimateLive, refreshClimateInBackground, pushClimateLiveToRenderer);
-  pushCycleSteps[4].run = makePushTick(
+  pushCycleSteps[4].run = makePushTick(fetchClimateLive, refreshClimateInBackground, pushClimateLiveToRenderer);
+  pushCycleSteps[5].run = makePushTick(
     fetchCommodityOutlookLive,
     refreshCommodityOutlookInBackground,
     pushOutlookLiveToRenderer
   );
-  pushCycleSteps[5].run = makeCentralBankPushTick();
+  pushCycleSteps[6].run = makeCentralBankPushTick();
 }
 
 async function runPushCycle(force = false) {
@@ -293,6 +311,11 @@ function pushOutlookLiveToRenderer(data) {
   pushToRenderer('outlook-live', data, hashLiveItemsPayload);
 }
 
+function pushCommoditiesLiveToRenderer(data) {
+  if (!data?.exchanges?.some((ex) => ex.items?.length)) return;
+  pushToRenderer('commodities-live', data, hashCommoditiesPayload);
+}
+
 function getCentralBankRefreshMs() {
   const seconds = config.readConfig().policyRefreshSeconds;
   const resolved = Number.isFinite(seconds) ? seconds : 30;
@@ -301,6 +324,17 @@ function getCentralBankRefreshMs() {
 
 function hasCentralBankPayload(data) {
   return Boolean(data?.news?.length || data?.indicators?.length || data?.speeches?.length);
+}
+
+function hasLivePushPayload(data) {
+  return Boolean(
+    data?.pairs?.length ||
+    data?.items?.length ||
+    data?.exchanges?.some((ex) => ex.items?.length) ||
+    data?.categories?.length ||
+    data?.instruments?.length ||
+    hasCentralBankPayload(data)
+  );
 }
 
 function pushFedLiveToRenderer(data) {
@@ -474,7 +508,9 @@ ipcMain.handle('list-indices-history', async () => listIndicesWithHistory());
 
 ipcMain.handle('fetch-commodities-live', async (_event, options = {}) => {
   try {
-    return await fetchCommoditiesLive(options);
+    const data = await fetchCommoditiesLive(options);
+    if (!data?.error) pushCommoditiesLiveToRenderer(data);
+    return data;
   } catch (err) {
     return { error: localizeErrorMessage(err.message || '大宗商品行情更新失败') };
   }

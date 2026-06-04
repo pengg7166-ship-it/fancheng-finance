@@ -63,6 +63,11 @@ contextBridge.exposeInMainWorld('fancheng', {
     ipcRenderer.on('outlook-live', handler);
     return () => ipcRenderer.removeListener('outlook-live', handler);
   },
+  onCommoditiesLive: (callback) => {
+    const handler = (_event, payload) => callback(payload);
+    ipcRenderer.on('commodities-live', handler);
+    return () => ipcRenderer.removeListener('commodities-live', handler);
+  },
   onWindowFocusChanged: (callback) => {
     const handler = (_event, payload) => callback(payload);
     ipcRenderer.on('window-focus-changed', handler);

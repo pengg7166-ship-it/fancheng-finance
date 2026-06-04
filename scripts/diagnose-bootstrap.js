@@ -147,6 +147,9 @@ app.whenReady().then(async () => {
     auInst?.wInstant != null &&
     auInst?.latencyState != null &&
     typeof auInst?.factorBreakdown?.instant === 'number';
+  const auRationaleLen = (auInst?.predictionRationale || '').length;
+  const rationaleOk = auRationaleLen > 20;
+  const predBoxesOk = Boolean(auInst?.scenarios?.base?.low != null && auInst?.nextDayRangePct?.expectedMovePct != null);
   if (
     firstThree.length >= 3 &&
     hasCommodities &&
@@ -158,10 +161,12 @@ app.whenReady().then(async () => {
       !volForecastNumeric ||
       !scenariosOk ||
       !regimeOk ||
-      !adaptiveOk)
+      !adaptiveOk ||
+      !rationaleOk ||
+      !predBoxesOk)
   ) {
     console.error(
-      `[diagnose] outlook diversity check FAILED rangesDistinct=${rangesDistinct} scoresDistinct=${scoresDistinct} noPendingDirection=${noPendingDirection} auRangeOk=${auRangeOk} factorBreakdownDistinct=${factorBreakdownDistinct} volForecastNumeric=${volForecastNumeric} scenariosOk=${scenariosOk} regimeOk=${regimeOk} adaptiveOk=${adaptiveOk} auSpan=${auRangeSpan}`
+      `[diagnose] outlook diversity check FAILED rangesDistinct=${rangesDistinct} scoresDistinct=${scoresDistinct} noPendingDirection=${noPendingDirection} auRangeOk=${auRangeOk} factorBreakdownDistinct=${factorBreakdownDistinct} volForecastNumeric=${volForecastNumeric} scenariosOk=${scenariosOk} regimeOk=${regimeOk} adaptiveOk=${adaptiveOk} rationaleOk=${rationaleOk} predBoxesOk=${predBoxesOk} auRationaleLen=${auRationaleLen} auSpan=${auRangeSpan}`
     );
   }
   console.log(
@@ -217,11 +222,15 @@ app.whenReady().then(async () => {
       const firstRow = outlookPanel?.querySelector('.outlook-instrument-row');
       const firstTitle = firstRow?.querySelector('.outlook-inst-title');
       const firstPrice = firstRow?.querySelector('.outlook-inst-price');
-      const firstRange = firstRow?.querySelector('.outlook-range-value');
+      const firstPredBox = firstRow?.querySelector('.outlook-pred-box');
+      const firstRationale = outlookPanel?.querySelector('.outlook-prediction-rationale');
       const titleLen = firstTitle?.textContent?.trim().length || 0;
       const priceText = firstPrice?.textContent?.trim() || '';
-      const rangeText = firstRange?.textContent?.trim() || '';
+      const predText = firstPredBox?.textContent?.trim() || '';
+      const rationaleText = firstRationale?.textContent?.trim() || '';
       const titleFontPx = firstTitle ? parseFloat(getComputedStyle(firstTitle).fontSize) : 0;
+      const predFontPx = firstPredBox ? parseFloat(getComputedStyle(firstPredBox).fontSize) : 0;
+      const blurOnPred = firstPredBox ? getComputedStyle(firstPredBox).filter !== 'none' : false;
       return {
         lastUpdated: document.getElementById('lastUpdated')?.textContent,
         panelsHidden: panels?.classList.contains('hidden'),
@@ -241,8 +250,13 @@ app.whenReady().then(async () => {
           titleFontPx,
           titleLegible: titleLen >= 2 && titleFontPx >= 13,
           priceText: priceText.slice(0, 40),
-          rangeText: rangeText.slice(0, 40),
-          hasPriceOrRangeText: /[\d.%+]/.test(priceText) || /[%~]/.test(rangeText),
+          predText: predText.slice(0, 60),
+          predBoxesVisible: Boolean(firstPredBox),
+          predFontPx,
+          predLegible: predFontPx >= 13 && !blurOnPred,
+          rationaleLen: rationaleText.length,
+          rationaleOk: rationaleText.length > 20 && !/研判积累中/.test(rationaleText),
+          hasPriceOrPredText: /[\d.%+]/.test(priceText) || /[%~±]/.test(predText),
         },
         errorBanner: document.getElementById('errorBanner')?.innerText,
         version: document.getElementById('appVersion')?.textContent,

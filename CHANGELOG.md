@@ -1,5 +1,28 @@
 # 更新日志
 
+## v1.21.1 — 2026-06-04
+
+### 升级：大宗研判现价实时 + 边框行情盒
+
+- **现价列**：`outlook-price-box` 大字号价格 + 单位 + 独立边框涨跌幅（红/绿）；主进程 `commodities-live` 推送与新浪缓存同源
+- **DOM 增量**：`updateOutlookPriceCells` 仅补丁现价列，研判列表 hash 不再含 `price/changePct`，避免整表重绘跳过行情
+- **节流**：每品种 DOM 补丁最快 1 秒；推送批次 `batch: true` 一次打完
+- **推送环**：统一 push 循环新增 commodities 步；`fetch-commodities-live` 成功后亦推送
+
+---
+
+## v1.21.0 — 2026-06-04
+
+### 升级：大宗研判预测双框 + 预测校验 + 版面重排
+
+- **预测双框**：主表「次日预测」列展示平滑预测（base + ±波动）与极端预测（stress + 触发角标）；14px 高对比边框，行高 ≥72px，去除发虚小字
+- **预测缘由** `predictionRationale`：引擎从 σ20 / EMA / 60日分位 / 资讯条数 / 资金关注 / 双速反射 / 盘中涨跌合成 2–3 行中文依据（非模板占位）
+- **预测校验** `commodity-outlook-history.js`：快照写入 `predictedMid/Low/High` + `priceAtPredict`；下一交易日 K 线收盘或间隔现价解析 `accuracy.jsonl`；详情区「预测校验」表 + 页脚近7日方向命中率
+- **版面**：宏观因子横向滚动 chips → 工具栏（板块/更新/存档/命中率）→ 主表 → 点击下方全宽 `outlook-detail-panel`（四情景 | 缘由+双速 | 校验+因子条）
+- **诊断**：断言预测双框可见、`predictionRationale` 长度 >20、无「研判积累中」方向文案
+
+---
+
 ## v1.20.0 — 2026-06-04
 
 ### 升级：双速市场反射 + 四情景 + 研判存档

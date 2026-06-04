@@ -1,16 +1,19 @@
 /**
- * 大宗研判变更存档 — JSONL 日文件 + 品种 latest 快照（异步写入，不阻塞渲染）
+ * 大宗研判变更存档 — JSONL 日文件 + 品种 latest 快照 + 预测校验
  */
 const fs = require('fs');
 const path = require('path');
+const diskCache = require('./disk-cache');
 const { getDataDir } = require('./data-paths');
 
 const MATERIAL_SCORE_DELTA = 0.05;
 const MATERIAL_MID_DELTA_PCT = 0.15;
 const BATCH_MIN_MS = 60 * 1000;
+const RESOLVE_MIN_MS = 4 * 60 * 60 * 1000;
 
 const lastWriteByInstrument = new Map();
 const pendingAppendQueue = [];
+const pendingAccuracyQueue = [];
 let flushTimer = null;
 
 function getOutlookHistoryRoot() {
@@ -26,13 +29,23 @@ function todayKey(d = new Date()) {
   return d.toISOString().slice(0, 10);
 }
 
-function snapshotPath(instrumentId) {
+function snapshotDir(instrumentId) {
   const root = getOutlookHistoryRoot();
   if (!root) return null;
   const safe = String(instrumentId || 'unknown').replace(/[^\w.-]/gi, '_');
   const dir = path.join(root, 'outlook-snapshots', safe);
   fs.mkdirSync(dir, { recursive: true });
-  return path.join(dir, 'latest.json');
+  return dir;
+}
+
+function snapshotPath(instrumentId) {
+  const dir = snapshotDir(instrumentId);
+  return dir ? path.join(dir, 'latest.json') : null;
+}
+
+function accuracyPath(instrumentId) {
+  const dir = snapshotDir(instrumentId);
+  return dir ? path.join(dir, 'accuracy.jsonl') : null;
 }
 
 function readLatestSnapshot(instrumentId) {
@@ -45,6 +58,30 @@ function readLatestSnapshot(instrumentId) {
   }
 }
 
+function readAccuracyRecords(instrumentId, limit = 50) {
+  const fp = accuracyPath(instrumentId);
+  if (!fp || !fs.existsSync(fp)) return [];
+  try {
+    const lines = fs.readFileSync(fp, 'utf8').split('\n').filter(Boolean);
+    const rows = [];
+    for (const line of lines) {
+      try {
+        rows.push(JSON.parse(line));
+      } catch {
+        // skip
+      }
+    }
+    rows.sort((a, b) => String(b.predictTs).localeCompare(String(a.predictTs)));
+    return limit ? rows.slice(0, limit) : rows;
+  } catch {
+    return [];
+  }
+}
+
+function hasResolvedPredictTs(instrumentId, predictTs) {
+  return readAccuracyRecords(instrumentId, 200).some((r) => r.predictTs === predictTs);
+}
+
 function directionKey(inst) {
   return inst.directionTier || inst.direction || inst.directionLabel || 'neutral';
 }
@@ -54,12 +91,22 @@ function extractMid(inst) {
   return base?.mid ?? null;
 }
 
+function extractPredictionFields(inst) {
+  const base = inst.scenarios?.base || inst.nextDayRangePct || {};
+  return {
+    predictedMid: base.mid ?? null,
+    predictedLow: base.low ?? null,
+    predictedHigh: base.high ?? null,
+    priceAtPredict: inst.price ?? null,
+  };
+}
+
 function isMaterialChange(prev, next) {
   if (!prev) return true;
   const scoreDelta = Math.abs((next.compositeScore ?? 0) - (prev.compositeScore ?? 0));
   if (scoreDelta >= MATERIAL_SCORE_DELTA) return true;
   if (directionKey(prev) !== directionKey(next)) return true;
-  const prevMid = prev.baseRange?.mid ?? prev.mid;
+  const prevMid = prev.baseRange?.mid ?? prev.mid ?? prev.predictedMid;
   const nextMid = next.baseRange?.mid ?? extractMid(next);
   if (prevMid != null && nextMid != null && Math.abs(nextMid - prevMid) >= MATERIAL_MID_DELTA_PCT) {
     return true;
@@ -110,8 +157,98 @@ function buildReasonTags(prev, next, inst) {
   return tags.length ? tags : ['综合因子更新'];
 }
 
+function readKlineBarsFromCache(instrumentId) {
+  const key = `klines/commodity-${String(instrumentId || '').toLowerCase()}-day.json`;
+  const cached = diskCache.readStale(key);
+  return cached?.data?.klines || [];
+}
+
+function findNextDailyBar(bars, predictDay) {
+  if (!bars?.length) return null;
+  const sorted = [...bars].sort((a, b) => String(a.date).localeCompare(String(b.date)));
+  for (const bar of sorted) {
+    if (String(bar.date) > predictDay && bar.close > 0) return bar;
+  }
+  return null;
+}
+
+function computeHitDirection(predictedMid, actualPct, predictedLow, predictedHigh) {
+  const pm = Number(predictedMid);
+  const ap = Number(actualPct);
+  if (Number.isNaN(pm) || Number.isNaN(ap)) return false;
+  if (Math.abs(pm) >= 0.06) {
+    return (pm > 0 && ap > 0) || (pm < 0 && ap < 0);
+  }
+  const low = Number(predictedLow);
+  const high = Number(predictedHigh);
+  if (!Number.isNaN(low) && !Number.isNaN(high)) {
+    return ap >= low && ap <= high;
+  }
+  return Math.abs(ap) <= 0.35;
+}
+
+function tryResolvePrediction(prevSnapshot, inst) {
+  if (prevSnapshot?.predictedMid == null || prevSnapshot.priceAtPredict == null) return null;
+  if (hasResolvedPredictTs(inst.id, prevSnapshot.ts)) return null;
+
+  const predictTs = prevSnapshot.ts;
+  const predictMs = new Date(predictTs).getTime();
+  if (Number.isNaN(predictMs)) return null;
+
+  const nowMs = Date.now();
+  const predictDay = String(predictTs).slice(0, 10);
+
+  let actualPct = null;
+  let resolveTs = null;
+  let resolveSource = null;
+
+  const bars = readKlineBarsFromCache(inst.id);
+  const nextBar = findNextDailyBar(bars, predictDay);
+  if (nextBar?.close > 0 && prevSnapshot.priceAtPredict > 0) {
+    actualPct = ((nextBar.close - prevSnapshot.priceAtPredict) / prevSnapshot.priceAtPredict) * 100;
+    resolveTs = `${nextBar.date}T15:00:00.000Z`;
+    resolveSource = 'kline_close';
+  } else if (nowMs - predictMs >= RESOLVE_MIN_MS && inst.price != null && prevSnapshot.priceAtPredict > 0) {
+    actualPct = ((inst.price - prevSnapshot.priceAtPredict) / prevSnapshot.priceAtPredict) * 100;
+    resolveTs = inst.judgementUpdatedAt || new Date().toISOString();
+    resolveSource = 'price_delta';
+  }
+
+  if (actualPct == null) return null;
+
+  const predictedMid = Number(prevSnapshot.predictedMid);
+  const gapPct = +(actualPct - predictedMid).toFixed(3);
+
+  return {
+    instrumentId: inst.id,
+    predictTs,
+    resolveTs,
+    resolveSource,
+    predictedMid,
+    predictedLow: prevSnapshot.predictedLow ?? null,
+    predictedHigh: prevSnapshot.predictedHigh ?? null,
+    priceAtPredict: prevSnapshot.priceAtPredict,
+    actualPct: +actualPct.toFixed(3),
+    gapPct,
+    hitDirection: computeHitDirection(
+      predictedMid,
+      actualPct,
+      prevSnapshot.predictedLow,
+      prevSnapshot.predictedHigh
+    ),
+  };
+}
+
+function queueAccuracyAppend(record) {
+  pendingAccuracyQueue.push(record);
+  if (!flushTimer) {
+    flushTimer = setTimeout(flushPendingWrites, 0);
+  }
+}
+
 function buildSnapshotRecord(inst, prev, dataVersion) {
   const base = inst.scenarios?.base || inst.nextDayRangePct || {};
+  const prediction = extractPredictionFields(inst);
   const newsHits = (inst.factors?.news?.hits || []).slice(0, 8).map((h) => ({
     id: h.id || h.title,
     title: (h.title || '').slice(0, 120),
@@ -127,8 +264,10 @@ function buildSnapshotRecord(inst, prev, dataVersion) {
     directionLabel: inst.directionLabel,
     directionTier: inst.directionTier || inst.direction,
     baseRange: { low: base.low, mid: base.mid, high: base.high },
+    ...prediction,
     scenarios: inst.scenarios,
     factorBreakdown: inst.factorBreakdown,
+    predictionRationale: inst.predictionRationale || null,
     wInstant: inst.wInstant,
     wDelayed: inst.wDelayed,
     instantScore: inst.instantScore,
@@ -149,8 +288,8 @@ function buildSnapshotRecord(inst, prev, dataVersion) {
 
   if (prev) {
     record.deltaScore = +((record.compositeScore ?? 0) - (prev.compositeScore ?? 0)).toFixed(3);
-    const prevMid = prev.baseRange?.mid ?? prev.mid;
-    const nextMid = record.baseRange?.mid;
+    const prevMid = prev.baseRange?.mid ?? prev.mid ?? prev.predictedMid;
+    const nextMid = record.baseRange?.mid ?? record.predictedMid;
     if (prevMid != null && nextMid != null) {
       record.deltaMid = +(nextMid - prevMid).toFixed(3);
     }
@@ -170,26 +309,44 @@ function queueAppend(record) {
 function flushPendingWrites() {
   flushTimer = null;
   const root = getOutlookHistoryRoot();
-  if (!root || !pendingAppendQueue.length) return;
+  if (!root) return;
 
   const batch = pendingAppendQueue.splice(0, pendingAppendQueue.length);
-  const byDay = new Map();
-  for (const rec of batch) {
-    const day = todayKey(new Date(rec.ts));
-    if (!byDay.has(day)) byDay.set(day, []);
-    byDay.get(day).push(rec);
+  const accuracyBatch = pendingAccuracyQueue.splice(0, pendingAccuracyQueue.length);
+
+  if (batch.length) {
+    const byDay = new Map();
+    for (const rec of batch) {
+      const day = todayKey(new Date(rec.ts));
+      if (!byDay.has(day)) byDay.set(day, []);
+      byDay.get(day).push(rec);
+    }
+
+    for (const [day, records] of byDay) {
+      const jsonl = path.join(root, `${day}.jsonl`);
+      const lines = records.map((r) => JSON.stringify(r)).join('\n') + '\n';
+      fs.appendFile(jsonl, lines, { encoding: 'utf8' }, () => {});
+    }
+
+    for (const rec of batch) {
+      const fp = snapshotPath(rec.instrumentId);
+      if (!fp) continue;
+      fs.writeFile(fp, JSON.stringify(rec, null, 0), { encoding: 'utf8' }, () => {});
+    }
   }
 
-  for (const [day, records] of byDay) {
-    const jsonl = path.join(root, `${day}.jsonl`);
-    const lines = records.map((r) => JSON.stringify(r)).join('\n') + '\n';
-    fs.appendFile(jsonl, lines, { encoding: 'utf8' }, () => {});
-  }
-
-  for (const rec of batch) {
-    const fp = snapshotPath(rec.instrumentId);
-    if (!fp) continue;
-    fs.writeFile(fp, JSON.stringify(rec, null, 0), { encoding: 'utf8' }, () => {});
+  if (accuracyBatch.length) {
+    const byInst = new Map();
+    for (const rec of accuracyBatch) {
+      if (!byInst.has(rec.instrumentId)) byInst.set(rec.instrumentId, []);
+      byInst.get(rec.instrumentId).push(rec);
+    }
+    for (const [instrumentId, records] of byInst) {
+      const fp = accuracyPath(instrumentId);
+      if (!fp) continue;
+      const lines = records.map((r) => JSON.stringify(r)).join('\n') + '\n';
+      fs.appendFile(fp, lines, { encoding: 'utf8' }, () => {});
+    }
   }
 }
 
@@ -207,6 +364,9 @@ function recordOutlookSnapshots(instruments, { dataVersion } = {}) {
     if (!inst?.id || inst.outlookPending) continue;
 
     const prev = readLatestSnapshot(inst.id);
+    const accuracyRecord = prev ? tryResolvePrediction(prev, inst) : null;
+    if (accuracyRecord) queueAccuracyAppend(accuracyRecord);
+
     const record = buildSnapshotRecord(inst, prev, dataVersion);
     const material = isMaterialChange(prev, record);
 
@@ -215,8 +375,8 @@ function recordOutlookSnapshots(instruments, { dataVersion } = {}) {
 
     if (material || now - lastMs >= BATCH_MIN_MS) {
       if (prev) {
-        const prevMid = prev.baseRange?.mid ?? prev.mid;
-        const newMid = record.baseRange?.mid;
+        const prevMid = prev.baseRange?.mid ?? prev.mid ?? prev.predictedMid;
+        const newMid = record.baseRange?.mid ?? record.predictedMid;
         if (prevMid != null && newMid != null) {
           record.deltaMid = +(newMid - prevMid).toFixed(3);
         }
@@ -277,10 +437,71 @@ function readJsonlForDays(instrumentId, days) {
   return out;
 }
 
+function getPendingPrediction(instrumentId) {
+  const latest = readLatestSnapshot(instrumentId);
+  if (latest?.predictedMid == null || latest.priceAtPredict == null) return null;
+  if (hasResolvedPredictTs(instrumentId, latest.ts)) return null;
+  return latest;
+}
+
+function getDirectionHitRate7d(instrumentId = null) {
+  const root = getOutlookHistoryRoot();
+  if (!root) return { rate: null, hits: 0, total: 0 };
+
+  const cutoff = Date.now() - 7 * 24 * 60 * 60 * 1000;
+  let hits = 0;
+  let total = 0;
+
+  const snapshotsRoot = path.join(root, 'outlook-snapshots');
+  if (!fs.existsSync(snapshotsRoot)) return { rate: null, hits: 0, total: 0 };
+
+  const dirs = instrumentId
+    ? [path.join(snapshotsRoot, String(instrumentId).replace(/[^\w.-]/gi, '_'))]
+    : fs.readdirSync(snapshotsRoot).map((d) => path.join(snapshotsRoot, d));
+
+  for (const dir of dirs) {
+    if (!fs.existsSync(dir) || !fs.statSync(dir).isDirectory()) continue;
+    const fp = path.join(dir, 'accuracy.jsonl');
+    if (!fs.existsSync(fp)) continue;
+    try {
+      const lines = fs.readFileSync(fp, 'utf8').split('\n').filter(Boolean);
+      for (const line of lines) {
+        try {
+          const row = JSON.parse(line);
+          const resolveMs = new Date(row.resolveTs || row.predictTs).getTime();
+          if (Number.isNaN(resolveMs) || resolveMs < cutoff) continue;
+          total += 1;
+          if (row.hitDirection) hits += 1;
+        } catch {
+          // skip
+        }
+      }
+    } catch {
+      // skip
+    }
+  }
+
+  return {
+    rate: total > 0 ? +(hits / total).toFixed(3) : null,
+    hits,
+    total,
+  };
+}
+
 function getOutlookHistory(instrumentId, days = 7) {
   const root = getOutlookHistoryRoot();
   const rows = readJsonlForDays(instrumentId, days);
   const latest = instrumentId ? readLatestSnapshot(instrumentId) : null;
+  const accuracyRecords = instrumentId ? readAccuracyRecords(instrumentId, 20) : [];
+  const pending =
+    instrumentId && latest && !hasResolvedPredictTs(instrumentId, latest.ts) && latest.predictedMid != null
+      ? {
+          predictTs: latest.ts,
+          predictedMid: latest.predictedMid,
+          status: 'pending',
+        }
+      : null;
+
   return {
     root,
     instrumentId: instrumentId || null,
@@ -288,6 +509,9 @@ function getOutlookHistory(instrumentId, days = 7) {
     latest,
     todayCount: countTodayArchiveEntries(),
     changes: rows.slice(0, 500),
+    accuracyRecords: accuracyRecords.slice(0, 5),
+    pendingPrediction: pending,
+    directionHitRate7d: getDirectionHitRate7d(instrumentId),
   };
 }
 
@@ -312,10 +536,12 @@ function attachChangeDelta(inst) {
   const prev = readLatestSnapshot(inst.id);
   if (!prev) {
     inst.changeDelta = null;
+    inst.accuracyRecords = readAccuracyRecords(inst.id, 5);
+    inst.pendingPrediction = null;
     return inst;
   }
   const mid = extractMid(inst);
-  const prevMid = prev.baseRange?.mid ?? prev.mid;
+  const prevMid = prev.baseRange?.mid ?? prev.mid ?? prev.predictedMid;
   inst.changeDelta = {
     deltaScore: +((inst.compositeScore ?? 0) - (prev.compositeScore ?? 0)).toFixed(3),
     deltaMid: mid != null && prevMid != null ? +(mid - prevMid).toFixed(3) : null,
@@ -327,16 +553,24 @@ function attachChangeDelta(inst) {
     reasonTags: [],
   };
   inst.changeDelta.reasonTags = buildReasonTags(prev, inst.changeDelta, inst);
+  inst.accuracyRecords = readAccuracyRecords(inst.id, 5);
+  inst.pendingPrediction =
+    !hasResolvedPredictTs(inst.id, prev.ts) && prev.predictedMid != null
+      ? { predictTs: prev.ts, predictedMid: prev.predictedMid, status: 'pending' }
+      : null;
   return inst;
 }
 
 module.exports = {
   getOutlookHistoryRoot,
   readLatestSnapshot,
+  readAccuracyRecords,
   isMaterialChange,
   recordOutlookSnapshots,
   countTodayArchiveEntries,
   getOutlookHistory,
   exportOutlookHistory,
   attachChangeDelta,
+  getDirectionHitRate7d,
+  tryResolvePrediction,
 };
