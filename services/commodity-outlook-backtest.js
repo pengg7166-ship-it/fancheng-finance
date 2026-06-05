@@ -15,11 +15,12 @@ const { getCachedAllData } = require('./data-fetcher');
 
 const historicalContext = require('./commodity-outlook-historical-context');
 const eventCalendar = require('./commodity-outlook-event-calendar');
+const newsTagged = require('./news-tagged-loader');
 
 const MIN_BARS = 60;
 const MIN_WALK_START = 25;
 const LONG_RUN_START = historicalContext.LONG_RUN_START;
-const LONG_RUN_VERSION = 'v1.27.0';
+const LONG_RUN_VERSION = 'v1.28.0';
 
 let backtestRunning = false;
 let backtestProgress = { phase: 'idle', pct: 0, message: '' };
@@ -129,7 +130,10 @@ function predictAtBarIndexHistorical(spec, bars, tIndex, weights, prevFinanceReg
   if (!technical?.hasEnough) return null;
 
   const dataQuality = countSourceLanes(sources);
-  const newsImpact = { score: 0, shock: 0, hitCount: 0, hits: [] };
+  let newsImpact = newsTagged.isLoaded()
+    ? newsTagged.scoreNewsForInstrumentAtDate(meta, profile, barDate)
+    : { score: 0, shock: 0, hitCount: 0, hits: [] };
+  newsImpact = applyNewsPriceDampening(newsImpact, liveQuote.changePct);
 
   const phil = philosophy.evaluateInstrumentPhilosophy({
     meta,
@@ -154,7 +158,7 @@ function predictAtBarIndexHistorical(spec, bars, tIndex, weights, prevFinanceReg
     intradayChangePct: liveQuote.changePct,
     intradayScore: technical.intraday?.score || 0,
     volumeRatio: technical.volume?.ratio ?? 1,
-    newsHits: [],
+    newsHits: newsImpact.hits || [],
     sources,
     vix,
     oiDeltaPct: technical.oi?.deltaPct,
@@ -227,8 +231,8 @@ function predictAtBarIndexHistorical(spec, bars, tIndex, weights, prevFinanceReg
     historicalVol: technical.historicalVol || {},
     smoothedVol: technical.smoothedVol,
     volatilityTier: profile.volatilityTier,
-    newsFactor: { score: 0, hitCount: 0 },
-    newsShock: 0,
+    newsFactor: { score: newsImpact.score, hitCount: newsImpact.hitCount },
+    newsShock: newsImpact.shock ?? 0,
     newsShockCap: profile.newsShockCap,
     macroScore: macroScores.china * 0.4 + macroScores.usd * 0.3,
     techScore: technical.techScore,
@@ -486,7 +490,7 @@ function runLongrunBacktest2019({ force = false, onProgress = null, writeAllInst
       const byMatrix = aggregateMatrixStats(allFlatRows);
       const runtimeMs = Date.now() - t0;
 
-      const dffSource = historicalContext.getDffAtDate('2024-01-01') != null ? 'fred-dff-cache+piecewise' : 'piecewise';
+      const dffSource = historicalContext.getDffAtDate('2024-01-01') != null ? 'fred-history-cache' : 'piecewise';
 
       const summary = {
         version: LONG_RUN_VERSION,
@@ -502,12 +506,19 @@ function runLongrunBacktest2019({ force = false, onProgress = null, writeAllInst
         hits: allHits,
         total: allTotal,
         dataSources: {
-          klines: 'Eastmoney/Sina → data/klines/commodity-{id}-day.json',
+          klines: 'Eastmoney-futures/Sina → data/klines/commodity-{id}-day.json (+openInterest)',
+          oi: 'data/history/oi/{id}.json',
+          fred: 'data/history/fred-{dff,vix,real10y,m2sl,dxy}.json',
           dff: dffSource,
-          vix: 'fred-vixcls-daily.json or piecewise',
+          vix: 'fred-vixcls-daily.json',
+          m2: 'fred-m2sl-monthly.json (forward-filled daily)',
+          real10y: 'fred-real10y-daily.json',
           macroEvents: 'commodity-outlook-event-calendar HISTORICAL_EVENTS',
+          newsTagged: newsTagged.isLoaded()
+            ? `${newsTagged.getRowCount()} rows from news-tagged.csv`
+            : 'not loaded (run scripts/seed-news-from-events.js)',
         },
-        activeEventModel: 'sector-weighted-regime-v1.27',
+        activeEventModel: 'sector-weighted-regime-v1.28',
         byEra,
         bySector,
         byMatrix,

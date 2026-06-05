@@ -1,0 +1,59 @@
+date,title,commodity_tags,direction,stars,source_tier,event_id,notes
+2016-01-01,2016供给侧改革(参考),ZC;jm;sc;fu,neutral,4,policy,china_supply_side_ref,由 event-calendar 自动生成；区间 2016-01-01 ~ 2017-12-31
+2016-02-04,国务院发布钢铁行业化解过剩产能意见,rb;i;jm;ZC,bullish,4,policy,china_supply_side_2016,供给侧改革启动，黑色系供给收缩预期
+2017-12-31,2016供给侧改革(参考),ZC;jm;sc;fu,neutral,4,policy,china_supply_side_ref,由 event-calendar 自动生成；区间 2016-01-01 ~ 2017-12-31
+2019-01-01,2019贸易战/疫前中性,,neutral,3,macro,pre_covid_neutral,由 event-calendar 自动生成；区间 2019-01-01 ~ 2020-02-29
+2019-01-30,美联储 FOMC 维持利率不变,au;ag;cu;sc,neutral,3,macro,fomc_20190130,FOMC 决议日；来源：Fed 公开日程
+2019-03-20,美联储 FOMC 维持利率不变,au;ag;cu;sc,neutral,3,macro,fomc_20190320,FOMC 决议日；来源：Fed 公开日程
+2019-05-01,美联储 FOMC 维持利率不变,au;ag;cu;sc,neutral,3,macro,fomc_20190501,FOMC 决议日；来源：Fed 公开日程
+2019-05-10,美国对2000亿美元中国商品加征关税至25%,cu;sc;rb,bearish,4,geo,us_china_tariff_2019,贸易战升级，工业金属与能化承压
+2019-07-31,美联储 FOMC 降息 25bp,au;ag;cu;sc,bullish,4,macro,fomc_20190731,FOMC 决议日；来源：Fed 公开日程
+2019-09-18,美联储 FOMC 降息 25bp,au;ag;cu;sc,bullish,4,macro,fomc_20190918,FOMC 决议日；来源：Fed 公开日程
+2019-10-30,美联储 FOMC 降息 25bp,au;ag;cu;sc,bullish,4,macro,fomc_20191030,FOMC 决议日；来源：Fed 公开日程
+2019-12-11,美联储 FOMC 维持利率不变,au;ag;cu;sc,neutral,3,macro,fomc_20191211,FOMC 决议日；来源：Fed 公开日程
+2020-01-01,印尼宣布禁止镍矿原矿出口,ni;ss,bullish,5,policy,indonesia_nickel_ban_2020,镍供应冲击，不锈钢原料紧张
+2020-02-29,2019贸易战/疫前中性,,neutral,3,macro,pre_covid_neutral,由 event-calendar 自动生成；区间 2019-01-01 ~ 2020-02-29
+2020-03-01,COVID冲击+Fed零利率,sc;au;cu;rb;FG,bearish,4,geo,covid_crash_fed_zero,由 event-calendar 自动生成；区间 2020-03-01 ~ 2020-06-30
+2020-03-03,美联储 FOMC 降息 50bp,au;ag;cu;sc,bullish,4,macro,fomc_20200303,FOMC 决议日；来源：Fed 公开日程
+2020-03-09,全球疫情恐慌，原油与风险资产暴跌,sc;fu;au;cu;rb,bearish,5,geo,covid_crash_mar2020,COVID 冲击日；黄金相对抗跌可单独标注 bullish
+2020-03-15,美联储 FOMC 紧急大幅降息,au;ag;cu;sc,bullish,4,macro,fomc_20200315,FOMC 决议日；来源：Fed 公开日程
+2020-03-15,美联储紧急降息至零并重启 QE,au;ag;sc,bullish,5,macro,fed_emergency_cut_2020,流动性泛滥，贵金属与原油反弹
+2020-03-19,美联储 FOMC 宣布 QE 与零利率,au;ag;cu;sc,bullish,3,macro,fomc_20200319,FOMC 决议日；来源：Fed 公开日程
+2020-04-20,WTI 五月合约首次负油价,sc;fu,bearish,5,commodity,wti_negative_2020,储油危机，能化极度悲观后反转
+2020-06-30,COVID冲击+Fed零利率,sc;au;cu;rb;FG,bearish,4,geo,covid_crash_fed_zero,由 event-calendar 自动生成；区间 2020-03-01 ~ 2020-06-30
+2020-07-01,2020-2021疫后复苏,sc;cu;rb;i;jm,bullish,4,policy,covid_recovery_rally,由 event-calendar 自动生成；区间 2020-07-01 ~ 2021-12-31
+2021-10-19,发改委连发调控煤炭价格政策,ZC;jm;rb,bearish,4,policy,china_coal_cap_2021,动力煤/焦煤政策顶
+2021-12-31,2020-2021疫后复苏,sc;cu;rb;i;jm,bullish,4,policy,covid_recovery_rally,由 event-calendar 自动生成；区间 2020-07-01 ~ 2021-12-31
+2022-02-24,俄罗斯对乌克兰发动特别军事行动,sc;fu;c;m;WH,bullish,5,geo,ru_ukraine_invade,能源/粮食供应冲击
+2022-02-24,俄乌冲突能源/粮食,sc;fu;WH;c;m;jm;FG,bullish,4,geo,ru_ukraine_supply,由 event-calendar 自动生成；区间 2022-02-24 ~ 持续
+2022-03-01,Fed激进加息,au;ag;cu,bearish,4,macro,fed_hike_aggressive,由 event-calendar 自动生成；区间 2022-03-01 ~ 2023-12-31
+2022-03-16,美联储 FOMC 加息 25bp,au;ag;cu;sc,bearish,4,macro,fomc_20220316,FOMC 决议日；来源：Fed 公开日程
+2022-03-16,美联储开启加息周期（FOMC+25bp）,au;ag;cu,bearish,4,macro,fed_hike_cycle_start,实际利率上行压制贵金属
+2022-05-04,美联储 FOMC 加息 50bp,au;ag;cu;sc,bearish,4,macro,fomc_20220504,FOMC 决议日；来源：Fed 公开日程
+2022-06-15,美联储 FOMC 加息 75bp,au;ag;cu;sc,bearish,4,macro,fomc_20220615,FOMC 决议日；来源：Fed 公开日程
+2022-06-20,印尼进一步收紧镍产品出口政策,ni,bullish,4,policy,indonesia_nickel_2022,镍二次供应冲击
+2022-07-27,美联储 FOMC 加息 75bp,au;ag;cu;sc,bearish,4,macro,fomc_20220727,FOMC 决议日；来源：Fed 公开日程
+2022-09-21,美联储 FOMC 加息 75bp,au;ag;cu;sc,bearish,4,macro,fomc_20220921,FOMC 决议日；来源：Fed 公开日程
+2022-11-02,美联储 FOMC 加息 75bp,au;ag;cu;sc,bearish,4,macro,fomc_20221102,FOMC 决议日；来源：Fed 公开日程
+2022-12-14,美联储 FOMC 加息 50bp,au;ag;cu;sc,bearish,4,macro,fomc_20221214,FOMC 决议日；来源：Fed 公开日程
+2023-02-01,美联储 FOMC 加息 25bp,au;ag;cu;sc,bearish,4,macro,fomc_20230201,FOMC 决议日；来源：Fed 公开日程
+2023-03-08,硅谷银行倒闭引发金融恐慌,au;ag;cu,bullish,3,macro,svb_crisis_2023,避险买盘，随后 Fed 预期转向
+2023-03-22,美联储 FOMC 加息 25bp,au;ag;cu;sc,bearish,4,macro,fomc_20230322,FOMC 决议日；来源：Fed 公开日程
+2023-05-03,美联储 FOMC 加息 25bp,au;ag;cu;sc,bearish,4,macro,fomc_20230503,FOMC 决议日；来源：Fed 公开日程
+2023-07-26,美联储 FOMC 加息 25bp,au;ag;cu;sc,bearish,4,macro,fomc_20230726,FOMC 决议日；来源：Fed 公开日程
+2023-09-20,美联储 FOMC 维持利率不变,au;ag;cu;sc,neutral,3,macro,fomc_20230920,FOMC 决议日；来源：Fed 公开日程
+2023-11-01,美联储 FOMC 维持利率不变,au;ag;cu;sc,neutral,3,macro,fomc_20231101,FOMC 决议日；来源：Fed 公开日程
+2023-12-13,美联储 FOMC 维持利率不变,au;ag;cu;sc,neutral,3,macro,fomc_20231213,FOMC 决议日；来源：Fed 公开日程
+2023-12-31,Fed激进加息,au;ag;cu,bearish,4,macro,fed_hike_aggressive,由 event-calendar 自动生成；区间 2022-03-01 ~ 2023-12-31
+2024-03-01,BOJ退出负利率,au;ag;cu;ni,neutral,4,macro,boj_nirp_exit,由 event-calendar 自动生成；区间 2024-03-01 ~ 2025-12-31
+2024-03-19,日本央行结束负利率政策,au;ni;cu,bearish,4,macro,boj_nirp_exit_day,日元走强，贵金属承压
+2024-09-01,Fed再宽松/降息,au;cu;sc,neutral,4,macro,fed_ease_restart,由 event-calendar 自动生成；区间 2024-09-01 ~ 持续
+2024-09-18,美联储 FOMC 降息 50bp,au;ag;cu;sc,bullish,4,macro,fomc_20240918,FOMC 决议日；来源：Fed 公开日程
+2024-09-18,美联储开启降息周期（FOMC-50bp）,au;cu;sc,bullish,4,macro,fed_cut_sep2024,宽松预期支撑大宗
+2024-11-07,美联储 FOMC 降息 25bp,au;ag;cu;sc,bullish,4,macro,fomc_20241107,FOMC 决议日；来源：Fed 公开日程
+2024-12-18,美联储 FOMC 降息 25bp,au;ag;cu;sc,bullish,4,macro,fomc_20241218,FOMC 决议日；来源：Fed 公开日程
+2025-01-01,2025反内卷,FG;ps;jm;lc,bullish,4,policy,china_anti_involution,由 event-calendar 自动生成；区间 2025-01-01 ~ 持续
+2025-01-29,美联储 FOMC 维持利率不变,au;ag;cu;sc,neutral,3,macro,fomc_20250129,FOMC 决议日；来源：Fed 公开日程
+2025-07-01,中央强调反内卷、规范无序竞争,FG;ps;jm;lc;SA,bullish,4,policy,china_anti_involution_2025,供给纪律，化工/光伏链受益
+2025-12-31,BOJ退出负利率,au;ag;cu;ni,neutral,4,macro,boj_nirp_exit,由 event-calendar 自动生成；区间 2024-03-01 ~ 2025-12-31
+2026-01-01,2026美以伊地缘,sc;fu;au;ag;lu,bullish,4,geo,us_iran_israel_2026,由 event-calendar 自动生成；区间 2026-01-01 ~ 持续

@@ -1,0 +1,9 @@
+date,title,commodity_tags,direction,stars,source_tier,event_id,notes
+2016-01-01,2016供给侧改革(参考),ZC;jm;sc;fu,neutral,4,policy,china_supply_side_ref,由 event-calendar 自动生成；区间 2016-01-01 ~ 2017-12-31
+2016-02-04,国务院发布钢铁行业化解过剩产能意见,rb;i;jm;ZC,bullish,4,policy,china_supply_side_2016,供给侧改革启动，黑色系供给收缩预期
+2017-12-31,2016供给侧改革(参考),ZC;jm;sc;fu,neutral,4,policy,china_supply_side_ref,由 event-calendar 自动生成；区间 2016-01-01 ~ 2017-12-31
+2019-01-01,2019贸易战/疫前中性,,neutral,3,macro,pre_covid_neutral,由 event-calendar 自动生成；区间 2019-01-01 ~ 2020-02-29
+2019-01-30,美联储 FOMC 维持利率不变,au;ag;cu;sc,neutral,3,macro,fomc_20190130,FOMC 决议日；来源：Fed 公开日程
+2019-03-20,美联储 FOMC 维持利率不变,au;ag;cu;sc,neutral,3,macro,fomc_20190320,FOMC 决议日；来源：Fed 公开日程
+2019-05-01,美联储 FOMC 维持利率不变,au;ag;cu;sc,neutral,3,macro,fomc_20190501,FOMC 决议日；来源：Fed 公开日程
+2019-05-10,美国对2000亿美元中国商品加征关税至25%,cu;sc;rb,bearish,4,geo,us_china_tariff_2019,贸易战升级，工业金属与能化承压
