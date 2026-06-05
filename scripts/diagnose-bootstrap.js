@@ -193,7 +193,21 @@ app.whenReady().then(async () => {
     cuInst?.scenarios?.bull?.mid != null &&
     Math.abs(Number(cuInst.scenarios.bull.mid) - Number(cuInst.scenarios.base.mid)) >= 0.02;
   const latencyUiOk = Boolean(auInst?.latencyState && auInst?.latencyLabel);
-  const versionOk = APP_VERSION === '1.23.0';
+  const versionOk = APP_VERSION === '1.24.0';
+  const scInst = (engineProbe.instruments || []).find((i) => String(i.id).toLowerCase() === 'sc');
+  const fgInst = (engineProbe.instruments || []).find((i) => String(i.id).toLowerCase() === 'fg');
+  const niInst = (engineProbe.instruments || []).find((i) => String(i.id).toLowerCase() === 'ni');
+  const philosophyFieldOk = (inst) =>
+    inst?.philosophy?.supplyDemand?.state != null &&
+    inst?.philosophy?.financialEnvironment?.regime != null &&
+    inst?.philosophy?.sdFinance?.score != null &&
+    inst?.philosophy?.ranked?.primaryChip;
+  const philosophyOk =
+    philosophyFieldOk(auInst) &&
+    philosophyFieldOk(scInst) &&
+    philosophyFieldOk(fgInst) &&
+    philosophyFieldOk(niInst);
+  const philosophyMatrixOk = Boolean(engineProbe.framework?.philosophyMatrix?.demandStrong?.loose?.paradigm0820);
   const {
     countTodayArchiveEntries,
     getOutlookHistoryRoot,
@@ -232,6 +246,8 @@ app.whenReady().then(async () => {
     historicalOk,
     techTagsOk,
     dailyFolderOk,
+    philosophyOk,
+    philosophyMatrixOk,
   };
   const enginePass = Object.values(engineChecks).every(Boolean);
   if (!enginePass) {

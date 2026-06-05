@@ -462,11 +462,15 @@ async function refreshAllData() {
     fredApiKeyConfigured: isFredApiKeyConfigured(),
   };
 
-  dataCache = { at: Date.now(), payload };
-  if (payloadHasCacheableData(payload)) {
-    persistToDisk(withLocalizedBojSources(payload));
+  const tagged = {
+    ...payload,
+    sources: tagOutlookTrigger(payload.sources, 'background-refresh'),
+  };
+  dataCache = { at: Date.now(), payload: tagged };
+  if (payloadHasCacheableData(tagged)) {
+    persistToDisk(withLocalizedBojSources(tagged));
   }
-  return withLocalizedBojSources(payload);
+  return withLocalizedBojSources(tagged);
 }
 
 function scheduleBackgroundRefresh() {
@@ -622,6 +626,27 @@ async function fetchIndicesQuick() {
   return { ...data, fetchedAt: new Date().toISOString() };
 }
 
+const OUTLOOK_TRIGGER_KEYS = new Set([
+  'indices',
+  'macro',
+  'forex',
+  'policy',
+  'geopolitics',
+  'climate',
+  'fed',
+  'boj',
+  'commodities',
+]);
+
+function tagOutlookTrigger(sources, triggerKey) {
+  if (!sources || !OUTLOOK_TRIGGER_KEYS.has(triggerKey)) return sources;
+  return {
+    ...sources,
+    _outlookTrigger: triggerKey,
+    _outlookTriggerAt: new Date().toISOString(),
+  };
+}
+
 function patchSourceInCache(key, source) {
   hydrateFromDisk();
   const normalized =
@@ -632,14 +657,16 @@ function patchSourceInCache(key, source) {
     fetchedAt: new Date().toISOString(),
     fredApiKeyConfigured: isFredApiKeyConfigured(),
   };
+  const sources = tagOutlookTrigger({ ...prev.sources, [key]: normalized }, key);
   const payload = {
     ...prev,
-    sources: { ...prev.sources, [key]: normalized },
+    sources,
     fetchedAt: new Date().toISOString(),
     fredApiKeyConfigured: isFredApiKeyConfigured(),
   };
   dataCache = { at: Date.now(), payload };
   if (sourceHasData(normalized)) persistToDisk(payload);
+  if (OUTLOOK_TRIGGER_KEYS.has(key)) notifyOutlookSourcesRefreshed(sources);
   return payload;
 }
 

@@ -20,12 +20,13 @@ const {
   readCachedKlines,
   readPrevVolForecast,
 } = require('./commodity-technical-analyzer');
+const philosophy = require('./commodity-outlook-philosophy');
 
 const OUTLOOK_DISK_KEY = 'commodity-outlook-v4.json';
 const OUTLOOK_DISK_TTL_MS = 60 * 1000;
 const OUTLOOK_RECOMPUTE_DEBOUNCE_MS = 800;
 const PRICE_OI_CHANGE_THRESHOLD_PCT = 0.15;
-const OUTLOOK_ENGINE_VERSION = 'v1.23.0';
+const OUTLOOK_ENGINE_VERSION = 'v1.24.0';
 
 /** 市场研判环境（条件权重，非固定） */
 const REGIME_IDS = ['riskOn', 'riskOff', 'liquidityPanic', 'supplyShock', 'weatherShock', 'neutral'];
@@ -273,6 +274,11 @@ const FACTOR_BREAKDOWN_LABELS = {
   macroGeo: '地缘',
   macroClimate: '气候',
   macroPolicy: '政策',
+  macroBoj: '日央行',
+  philosophySdFinance: '供需×金融',
+  philosophyPrice: '现价反馈',
+  philosophyCapital: '资金情绪',
+  philosophyOil: '原油传导',
   technical: '技术面',
   capital: '资金关注',
   news: '资讯冲击',
@@ -1765,6 +1771,19 @@ function buildInstrumentOutlooks(sources, globalCtx = null) {
     .map(({ spec, meta, profile, liveQuote, technical, mergedQuote }) => {
       const newsImpact = scoreNewsImpactForInstrument(meta, profile, sources, newsPools);
       const newsFactor = { score: newsImpact.score, hits: newsImpact.hits, hitCount: newsImpact.hitCount };
+
+      const phil = philosophy.evaluateInstrumentPhilosophy({
+        meta,
+        profile,
+        spec,
+        sources,
+        technical,
+        liveQuote,
+        newsImpact,
+        sectorVolumeRank: sectorRanks[spec.id],
+        changePct: mergedQuote.changePct,
+      });
+
       const ctx = evaluateContext(sources, {
         sector: spec.sector,
         bucketId: spec.bucket,
@@ -1826,7 +1845,21 @@ function buildInstrumentOutlooks(sources, globalCtx = null) {
         macroScores,
       });
       Object.assign(factorBreakdown, adaptive.factorBreakdown);
-      const compositeScore = clamp(adaptive.compositeScore * 0.72 + factorComposite * 0.28, -1, 1);
+
+      const philContrib = phil.contributions || {};
+      factorBreakdown.philosophySdFinance = philContrib.sdFinance ?? phil.sdFinance?.score * 0.32 ?? 0;
+      factorBreakdown.philosophyPrice = philContrib.priceFeedback ?? 0;
+      factorBreakdown.philosophyCapital = philContrib.capitalSentiment ?? 0;
+      factorBreakdown.philosophyOil = philContrib.oilMother ?? 0;
+      factorBreakdown.macroBoj =
+        (macroScores.boj ?? 0) * (profile.macroSensitivity?.fed ?? 0.5) * (profile.factorWeights?.macroFed ?? 0.08);
+
+      const philosophyScore = phil.compositeScore ?? 0;
+      const compositeScore = clamp(
+        philosophyScore * 0.58 + adaptive.compositeScore * 0.22 + factorComposite * 0.2,
+        -1,
+        1
+      );
 
       const dirTier = scoreToDirectionTierWithVol(compositeScore, profile, technical.smoothedVol);
       const direction = directionTierClass(dirTier.direction);
@@ -1913,6 +1946,7 @@ function buildInstrumentOutlooks(sources, globalCtx = null) {
         label: def.shortLabel,
         score: bucketFactorScores[def.id]?.score ?? 0,
         direction: scoreToDirection(bucketFactorScores[def.id]?.score ?? 0),
+        isPrimary: def.id === 'supply' && phil.policy?.isPrimaryMatch,
       }));
 
       const factorBreakdownDisplay = Object.entries(factorBreakdown)
@@ -2060,6 +2094,26 @@ function buildInstrumentOutlooks(sources, globalCtx = null) {
         latencyState: adaptive.latencyState,
         latencyLabel: adaptive.latencyLabel,
         dataVersion: lastOutlookDataVersion,
+        philosophy: {
+          supplyDemand: phil.supplyDemand,
+          financialEnvironment: phil.financialEnvironment,
+          sdFinance: phil.sdFinance,
+          policy: phil.policy,
+          climate: phil.climate,
+          geo: phil.geo,
+          oilMother: phil.oilMother,
+          capitalSentiment: phil.capitalSentiment,
+          priceFeedback: phil.priceFeedback,
+          boj: phil.boj,
+          macroChina: phil.macroChina,
+          ranked: phil.ranked,
+          compositeScore: phil.compositeScore,
+          paradigmHint: phil.paradigmHint,
+          logicSummary: phil.logicSummary,
+          primaryChip: phil.ranked?.primaryChip,
+          secondaryChip: phil.ranked?.secondaryChip,
+          primaryDriverId: phil.ranked?.primary?.[0]?.id || 'sdFinance',
+        },
       };
       return outlookHistory.attachChangeDelta(row);
     })
@@ -2141,7 +2195,9 @@ function buildCommodityOutlookFromSources(sources = {}) {
     factors,
     framework: {
       logicModel:
-        '双速反射(即时/滞后)+环境regime×品种权重 → 综合分 → 基线+突变双轨σ → base/bull/bear/stress 四情景',
+        '核心：供需×金融环境矩阵 → 主/次矛盾分级 → 现价反馈+资金情绪 → 技术/双速通道校验 → 四情景区间',
+      philosophyModel: 'Price = Supply/Demand × Financial Environment（v1.24 哲学层优先）',
+      philosophyMatrix: philosophy.SD_FINANCE_MATRIX,
       horizons: HORIZON_LABELS,
       factorIds: FACTOR_DEFS.map((f) => f.id),
       instrumentIds: INSTRUMENT_REGISTRY.map((i) => i.id),
@@ -2310,4 +2366,5 @@ module.exports = {
   buildPredictionRationale,
   buildHistoricalContext,
   OUTLOOK_ENGINE_VERSION,
+  philosophy,
 };

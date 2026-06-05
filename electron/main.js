@@ -311,16 +311,19 @@ function getPolicyRefreshMs() {
 
 function pushPolicyLiveToRenderer(data) {
   if (!data?.items?.length) return;
+  patchSourceInCache('policy', data);
   pushToRenderer('policy-live', data, hashLiveItemsPayload);
 }
 
 function pushGeopoliticsLiveToRenderer(data) {
   if (!data?.items?.length) return;
+  patchSourceInCache('geopolitics', data);
   pushToRenderer('geopolitics-live', data, hashLiveItemsPayload);
 }
 
 function pushClimateLiveToRenderer(data) {
   if (!data?.items?.length) return;
+  patchSourceInCache('climate', data);
   pushToRenderer('climate-live', data, hashLiveItemsPayload);
 }
 
@@ -331,11 +334,13 @@ function pushOutlookLiveToRenderer(data) {
 
 function pushCommoditiesLiveToRenderer(data) {
   if (!data?.exchanges?.some((ex) => ex.items?.length)) return;
+  patchSourceInCache('commodities', data);
   pushToRenderer('commodities-live', data, hashCommoditiesPayload);
 }
 
 function pushIndicesLiveToRenderer(data) {
   if (!data?.regions?.some((r) => r.indices?.length)) return;
+  patchSourceInCache('indices', data);
   pushToRenderer('indices-live', data, hashIndicesPayload);
 }
 

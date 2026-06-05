@@ -3013,6 +3013,58 @@ function renderOutlookAccuracyTable(inst) {
   </table>`;
 }
 
+function renderOutlookPhilosophyBlock(inst) {
+  const p = inst.philosophy;
+  if (!p) return '';
+  const sd = p.supplyDemand;
+  const fin = p.financialEnvironment;
+  const sf = p.sdFinance;
+  const primaryList = (p.ranked?.primary || [])
+    .slice(0, 4)
+    .map(
+      (f) =>
+        `<li class="outlook-philosophy-factor outlook-philosophy-primary"><span class="outlook-primary-chip">主</span> ${escapeHtml(f.label)} <span class="outlook-philosophy-weight">${escapeHtml(`${(f.score >= 0 ? '+' : '')}${Number(f.score).toFixed(2)}`)}</span></li>`
+    )
+    .join('');
+  const secondaryList = (p.ranked?.secondary || [])
+    .slice(0, 3)
+    .map(
+      (f) =>
+        `<li class="outlook-philosophy-factor outlook-philosophy-secondary${f.capped ? ' outlook-philosophy-downweighted' : ''}">${escapeHtml(f.label)}${f.capped ? ' <span class="outlook-secondary-note">权重降</span>' : ''}</li>`
+    )
+    .join('');
+  const oilBlock =
+    p.oilMother?.applicable && Math.abs(p.oilMother.score) > 0.03
+      ? `<p class="outlook-oil-spillover">原油传导：${escapeHtml(p.oilMother.label)} ${p.oilMother.score >= 0 ? '+' : ''}${Number(p.oilMother.score).toFixed(2)}</p>`
+      : '';
+  const paradigm =
+    p.paradigmHint || sf?.paradigm0820
+      ? `<p class="outlook-paradigm-hint">${escapeHtml(p.paradigmHint || '08/20范式：宽松+供弱需强')}</p>`
+      : '';
+  return `<div class="outlook-philosophy-block">
+    <h5>研判逻辑</h5>
+    <div class="outlook-philosophy-matrix">
+      <p><strong>供需判断</strong> ${escapeHtml(sd?.stateLabel || '—')}（${escapeHtml(sd?.summary || '')}）</p>
+      <p><strong>金融环境</strong> ${escapeHtml(fin?.regimeLabel || '—')} · ${escapeHtml(fin?.summary || '')}</p>
+      <p><strong>组合结论</strong> ${escapeHtml(sf?.note || p.logicSummary || '—')}</p>
+      ${paradigm}
+    </div>
+    <ul class="outlook-philosophy-factors">${primaryList}${secondaryList}</ul>
+    ${p.primaryChip ? `<p class="outlook-contradiction-chip outlook-primary-contradiction">${escapeHtml(p.primaryChip)}</p>` : ''}
+    ${p.secondaryChip ? `<p class="outlook-contradiction-chip outlook-secondary-contradiction">${escapeHtml(p.secondaryChip)}</p>` : ''}
+    ${oilBlock}
+    ${p.boj?.summary ? `<p class="outlook-boj-line">日央行：${escapeHtml(p.boj.summary)}</p>` : ''}
+  </div>`;
+}
+
+function renderOutlookPrimaryDriverChip(inst) {
+  const p = inst.philosophy;
+  if (!p?.primaryDriverId) return '';
+  const isPrimary = p.primaryDriverId === 'sdFinance' || p.policy?.isPrimaryMatch;
+  if (!isPrimary && p.ranked?.primary?.length === 0) return '';
+  return '<span class="outlook-driver-chip" title="主矛盾驱动">主</span>';
+}
+
 function renderOutlookHistoricalBlock(inst) {
   const hc = inst.historicalContext;
   if (!hc) return '<p class="outlook-accuracy-empty">历史对照数据积累中</p>';
@@ -3047,6 +3099,7 @@ function renderOutlookDetailPanel(inst) {
         ${renderOutlookChangeDelta(inst)}
       </div>
       <div class="outlook-detail-panel-col outlook-detail-col-rationale">
+        ${renderOutlookPhilosophyBlock(inst)}
         <h5>预测缘由</h5>
         <p class="outlook-prediction-rationale">${escapeHtml(inst.predictionRationale || inst.rationale || '—')}</p>
         <h5>历史对照</h5>
@@ -3363,11 +3416,16 @@ function updateOutlookPriceCells(commoditiesOrInstruments, options = {}) {
   }
 }
 
+const refreshOutlookOnPricePatchDebounced = debounce(() => {
+  if (window.fancheng?.fetchOutlookLive) void refreshOutlookLive({ force: false });
+}, OUTLOOK_DEBOUNCE_MS);
+
 function applyCommoditiesLiveToOutlook(commodities) {
   if (!commodities || commodities.error) return;
   window.__preloadedCommoditiesLive = commodities;
-  mergeCommoditiesPricesIntoOutlookCache(commodities);
+  const changed = mergeCommoditiesPricesIntoOutlookCache(commodities);
   updateOutlookPriceCells(commodities, { batch: true, flash: true });
+  if (changed) refreshOutlookOnPricePatchDebounced();
 }
 
 function renderOutlookInstrumentRow(inst) {
@@ -3378,7 +3436,7 @@ function renderOutlookInstrumentRow(inst) {
   return `<article class="outlook-instrument-row ${outlookDirectionClass(inst.direction)}${selected ? ' outlook-instrument-selected' : ''}" data-outlook-instrument="${escapeAttr(inst.id)}" data-outlook-sector="${escapeAttr(inst.sector || 'all')}">
     <button type="button" class="outlook-instrument-main" data-action="select-outlook-instrument" aria-expanded="${selected ? 'true' : 'false'}">
       <div class="outlook-inst-col outlook-inst-name">
-        <span class="outlook-inst-title">${escapeHtml(inst.name || inst.id)}</span>
+        <span class="outlook-inst-title">${renderOutlookPrimaryDriverChip(inst)}${escapeHtml(inst.name || inst.id)}</span>
         <span class="outlook-inst-ex">${escapeHtml(inst.exchange || '')}</span>
       </div>
       <div class="outlook-inst-col outlook-inst-price">${priceHtml}</div>
@@ -3677,6 +3735,13 @@ function renderOutlookPanel(source) {
 
   return `<div class="panel ${activeTab === 'outlook' ? 'active' : ''}" id="panel-outlook" role="tabpanel">
     <div class="policy-panel policy-reading-v2 outlook-panel">
+      <div class="outlook-core-header-strip">
+        <div class="outlook-core-banner">
+          <span class="outlook-core-banner-icon" aria-hidden="true">◆</span>
+          <span class="outlook-core-banner-text">核心研判 · 全板块数据汇入</span>
+        </div>
+        <span class="outlook-core-ribbon" aria-label="核心功能">CORE</span>
+      </div>
       <header class="policy-reading-head">
         <div class="policy-reading-head-main">
           <h2 class="policy-reading-title">${escapeHtml(source.dataLabel || '大宗走势研判')}</h2>
@@ -3704,7 +3769,7 @@ function renderOutlookPanel(source) {
         <h3 class="outlook-section-title">四大类 outlook 参考</h3>
         <div class="outlook-category-grid">${categoryCards}</div>
       </section>
-      <p class="policy-note outlook-note">v1.23.1 预测波动高对比 · 技术标签全展示 · 缘由/历史对照 · 每日对照 · ${hitRateNote}${source.stats?.todayArchiveCount != null ? ` · 今日存档 ${source.stats.todayArchiveCount} 条` : ''} · 仅供参考</p>
+      <p class="policy-note outlook-note outlook-core-tagline">核心研判 · 全板块数据汇入 · v1.24.1 供需×金融哲学层 · ${hitRateNote}${source.stats?.todayArchiveCount != null ? ` · 今日存档 ${source.stats.todayArchiveCount} 条` : ''} · 仅供参考</p>
     </div>
   </div>`;
 }
