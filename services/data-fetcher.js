@@ -586,7 +586,22 @@ function setDataRefreshListener(fn) {
 
 async function fetchIndicesLive() {
   const data = await fetchSource('indices');
-  return { ...data, fetchedAt: new Date().toISOString() };
+  const merged = { ...data, fetchedAt: new Date().toISOString(), liveRefreshedAt: new Date().toISOString() };
+  if (merged.regions?.some((r) => r.indices?.length)) {
+    patchSourceInCache('indices', merged);
+  }
+  return merged;
+}
+
+let indicesRefreshPromise = null;
+function refreshIndicesInBackground() {
+  if (indicesRefreshPromise) return indicesRefreshPromise;
+  indicesRefreshPromise = fetchIndicesLive()
+    .catch(() => null)
+    .finally(() => {
+      indicesRefreshPromise = null;
+    });
+  return indicesRefreshPromise;
 }
 
 async function fetchIndicesQuick() {
@@ -664,6 +679,7 @@ function refreshFedInBackground() {
 module.exports = {
   fetchAllData,
   fetchIndicesLive,
+  refreshIndicesInBackground,
   fetchIndicesQuick,
   fetchFedLive,
   refreshFedInBackground,

@@ -70,6 +70,11 @@ contextBridge.exposeInMainWorld('fancheng', {
     ipcRenderer.on('commodities-live', handler);
     return () => ipcRenderer.removeListener('commodities-live', handler);
   },
+  onIndicesLive: (callback) => {
+    const handler = (_event, payload) => callback(payload);
+    ipcRenderer.on('indices-live', handler);
+    return () => ipcRenderer.removeListener('indices-live', handler);
+  },
   onWindowFocusChanged: (callback) => {
     const handler = (_event, payload) => callback(payload);
     ipcRenderer.on('window-focus-changed', handler);

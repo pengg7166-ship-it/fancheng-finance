@@ -1054,9 +1054,15 @@ function renderIndexCard(idx) {
   const up = idx.change >= 0;
   const changeClass = up ? 'change-up' : 'change-down';
   const arrow = up ? '▲' : '▼';
-  return `<div class="index-card index-card-clickable" data-index-id="${escapeAttr(idx.id)}" role="button" tabindex="0" title="查看20年走势">
+  const staleBadge = idx.stale
+    ? '<span class="index-stale-badge" title="数据源仅提供昨收">昨收</span>'
+    : '';
+  const errorBadge = idx.error
+    ? `<span class="index-error-badge" title="${escapeAttr(idx.error)}">异常</span>`
+    : '';
+  return `<div class="index-card index-card-clickable${idx.stale ? ' index-card-stale' : ''}" data-index-id="${escapeAttr(idx.id)}" role="button" tabindex="0" title="查看20年走势">
     <div class="index-card-head">
-      <span class="index-name">${escapeHtml(idx.name)}</span>
+      <span class="index-name">${escapeHtml(idx.name)}${staleBadge}${errorBadge}</span>
       <span class="index-market">${escapeHtml(idx.market)}</span>
     </div>
     <div class="index-price">${formatNumber(idx.price, idx.price >= 1000 ? 2 : 2)}</div>
@@ -3698,7 +3704,7 @@ function renderOutlookPanel(source) {
         <h3 class="outlook-section-title">四大类 outlook 参考</h3>
         <div class="outlook-category-grid">${categoryCards}</div>
       </section>
-      <p class="policy-note outlook-note">v1.23.0 预测波动高对比 · 技术标签全展示 · 缘由/历史对照 · 每日对照 · ${hitRateNote}${source.stats?.todayArchiveCount != null ? ` · 今日存档 ${source.stats.todayArchiveCount} 条` : ''} · 仅供参考</p>
+      <p class="policy-note outlook-note">v1.23.1 预测波动高对比 · 技术标签全展示 · 缘由/历史对照 · 每日对照 · ${hitRateNote}${source.stats?.todayArchiveCount != null ? ` · 今日存档 ${source.stats.todayArchiveCount} 条` : ''} · 仅供参考</p>
     </div>
   </div>`;
 }
@@ -6040,6 +6046,18 @@ async function bootstrapApp() {
         applyCommoditiesLiveToOutlook(commodities);
         if (activeTab === 'commodities' && window.CommoditiesUI?.mergeLiveData) {
           window.CommoditiesUI.mergeLiveData(commodities);
+        }
+      });
+    }
+
+    if (window.fancheng.onIndicesLive) {
+      window.fancheng.onIndicesLive((indices) => {
+        if (!indices?.regions?.some((r) => r.indices?.length)) return;
+        if (isActivePanel('indices')) {
+          updateIndicesCards(indices);
+        } else {
+          const count = indices.regions.reduce((n, r) => n + (r.indices?.length || 0), 0);
+          if (count) updateNavTabBadge('indices', count);
         }
       });
     }

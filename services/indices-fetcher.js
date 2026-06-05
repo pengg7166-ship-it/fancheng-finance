@@ -2,7 +2,15 @@ const INDICES = [
   {
     region: '美洲',
     items: [
-      { id: 'sp500', name: '标普 500', market: '美国', sina: 'int_sp500', parser: 'int' },
+      {
+        id: 'sp500',
+        name: '标普 500',
+        market: '美国',
+        sina: 'gb_inx',
+        parser: 'gb',
+        eastmoney: '100.SPX',
+        stooq: '^spx',
+      },
       { id: 'dji', name: '道琼斯工业', market: '美国', sina: 'gb_dji', parser: 'gb' },
       { id: 'ixic', name: '纳斯达克综合', market: '美国', sina: 'gb_ixic', parser: 'gb' },
       { id: 'rut', name: '罗素 2000', market: '美国', stooq: '^rut' },
@@ -14,7 +22,15 @@ const INDICES = [
   {
     region: '欧洲',
     items: [
-      { id: 'ftse', name: '富时 100', market: '英国', sina: 'int_ftse', parser: 'int', stooq: '^ftse' },
+      {
+        id: 'ftse',
+        name: '富时 100',
+        market: '英国',
+        eastmoney: '100.FTSE',
+        stooq: '^ftse',
+        sina: 'int_ftse',
+        parser: 'int',
+      },
       { id: 'dax', name: '德国法兰克福', market: '德国', stooq: '^dax' },
       { id: 'cac', name: '法国巴黎', market: '法国', stooq: '^cac' },
       { id: 'stoxx50', name: '欧洲斯托克 50', market: '欧洲', stooq: '^stoxx50e' },
@@ -26,8 +42,22 @@ const INDICES = [
   {
     region: '亚太',
     items: [
-      { id: 'n225', name: '日经 225', market: '日本', sina: 'int_nikkei', parser: 'int' },
-      { id: 'hsi', name: '恒生指数', market: '中国香港', sina: 'int_hangseng', parser: 'int' },
+      {
+        id: 'n225',
+        name: '日经 225',
+        market: '日本',
+        sina: 'int_nikkei',
+        parser: 'int',
+        eastmoney: '100.N225',
+      },
+      {
+        id: 'hsi',
+        name: '恒生指数',
+        market: '中国香港',
+        sina: 'int_hangseng',
+        parser: 'int',
+        eastmoney: '100.HSI',
+      },
       { id: 'sse', name: '上证指数', market: '中国', sina: 's_sh000001', parser: 's' },
       { id: 'szse', name: '深证成指', market: '中国', sina: 's_sz399001', parser: 's' },
       { id: 'chinext', name: '创业板指', market: '中国', sina: 's_sz399006', parser: 's' },
@@ -48,11 +78,16 @@ const INDICES = [
   },
 ];
 
-const { fetchText } = require('./http-client');
+const { fetchText, fetchJson } = require('./http-client');
 
 const SINA_HEADERS = {
   Referer: 'https://finance.sina.com.cn',
   'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+};
+
+const EM_HEADERS = {
+  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+  Referer: 'https://finance.eastmoney.com/',
 };
 
 function parseSinaInt(parts) {
@@ -97,6 +132,10 @@ function parseSinaLine(code, parser, raw) {
   }
 }
 
+function isLiveSinaParser(parser) {
+  return parser === 'gb' || parser === 's';
+}
+
 async function fetchSinaBatch(items) {
   const codes = items.map((i) => i.sina).filter(Boolean);
   if (!codes.length) return {};
@@ -109,6 +148,19 @@ async function fetchSinaBatch(items) {
     if (m && m[2]) map[m[1]] = m[2];
   }
   return map;
+}
+
+async function fetchEastmoneyQuote(secid) {
+  const url = `https://push2.eastmoney.com/api/qt/stock/get?secid=${encodeURIComponent(secid)}&fields=f43,f169,f170`;
+  const json = await fetchJson(url, { headers: EM_HEADERS, timeout: 8000, retries: 1 });
+  const d = json?.data;
+  if (!d || d.f43 == null || Number.isNaN(d.f43)) throw new Error('暂无数据');
+  return {
+    price: d.f43 / 100,
+    change: (d.f169 || 0) / 100,
+    changePct: (d.f170 || 0) / 100,
+    updatedAt: new Date().toISOString(),
+  };
 }
 
 async function fetchStooqQuote(symbol) {
@@ -126,7 +178,7 @@ async function fetchStooqQuote(symbol) {
   const close = parseFloat(parts[6]);
   const dateStr = parts[1];
 
-  if (Number.isNaN(close)) throw new Error('解析失败');
+  if (Number.isNaN(close) || dateStr === 'B/D') throw new Error('解析失败');
 
   const change = Number.isNaN(open) ? 0 : close - open;
   const changePct = open ? (change / open) * 100 : 0;
@@ -140,29 +192,69 @@ async function fetchStooqQuote(symbol) {
   };
 }
 
-async function fetchOneIndex(item, sinaMap) {
-  try {
-    if (item.sina) {
-      const raw = sinaMap[item.sina.replace(/^s_|^gb_|^int_/, (m) => m)] || sinaMap[item.sina];
-      // sina keys in response: hq_str_int_sp500 -> key int_sp500, gb_dji, s_sh000001
-      const key = item.sina;
-      const data = parseSinaLine(key, item.parser, sinaMap[key]);
-      if (!data) throw new Error('暂无数据');
-      return { ...item, ...data, status: 'ok', source: 'sina' };
-    }
+async function fetchOneIndex(item, sinaMap = {}) {
+  const errors = [];
 
-    if (item.stooq) {
+  if (item.sina && isLiveSinaParser(item.parser)) {
+    try {
+      const data = parseSinaLine(item.sina, item.parser, sinaMap[item.sina]);
+      if (!data) throw new Error('暂无数据');
+      return {
+        ...item,
+        ...data,
+        status: 'ok',
+        source: 'sina',
+        updatedAt: new Date().toISOString(),
+      };
+    } catch (err) {
+      errors.push(err.message || '新浪失败');
+    }
+  }
+
+  if (item.eastmoney) {
+    try {
+      const data = await fetchEastmoneyQuote(item.eastmoney);
+      return { ...item, ...data, status: 'ok', source: 'eastmoney' };
+    } catch (err) {
+      errors.push(err.message || '东财失败');
+    }
+  }
+
+  if (item.stooq) {
+    try {
       const data = await Promise.race([
         fetchStooqQuote(item.stooq),
         new Promise((_, reject) => setTimeout(() => reject(new Error('超时')), 3500)),
       ]);
       return { ...item, ...data, status: 'ok', source: 'stooq' };
+    } catch (err) {
+      errors.push(err.message || 'Stooq失败');
     }
-
-    throw new Error('未配置数据源');
-  } catch (err) {
-    return { ...item, status: 'error', error: err.message || '获取失败' };
   }
+
+  if (item.sina && item.parser === 'int') {
+    try {
+      const data = parseSinaLine(item.sina, item.parser, sinaMap[item.sina]);
+      if (!data) throw new Error('暂无数据');
+      return {
+        ...item,
+        ...data,
+        status: 'ok',
+        source: 'sina',
+        stale: true,
+        changeNote: '昨收',
+      };
+    } catch (err) {
+      errors.push(err.message || '新浪昨收失败');
+    }
+  }
+
+  return {
+    ...item,
+    status: 'error',
+    error: errors[0] || '获取失败',
+    updatedAt: new Date().toISOString(),
+  };
 }
 
 async function fetchGlobalIndicesSinaOnly() {
@@ -178,14 +270,35 @@ async function fetchGlobalIndicesSinaOnly() {
     sinaMap = {};
   }
 
-  const sinaResults = sinaItems.map((item) => {
-    const data = parseSinaLine(item.sina, item.parser, sinaMap[item.sina]);
-    if (!data) return { ...item, status: 'error', error: '暂无数据' };
-    return { ...item, ...data, status: 'ok', source: 'sina' };
-  });
+  const eastmoneyItems = flat.filter(
+    (i) => i.eastmoney && (!i.sina || !isLiveSinaParser(i.parser))
+  );
+  const eastmoneyById = {};
+  if (eastmoneyItems.length) {
+    const emResults = await fetchWithConcurrency(
+      eastmoneyItems.map((item) => async () => fetchOneIndex(item, sinaMap)),
+      3
+    );
+    for (const row of emResults) {
+      if (row.status === 'ok') eastmoneyById[row.id] = row;
+    }
+  }
 
   const allResults = flat.map((item) => {
-    if (item.sina) return sinaResults.find((r) => r.id === item.id) || { ...item, status: 'error' };
+    if (item.sina && isLiveSinaParser(item.parser)) {
+      const data = parseSinaLine(item.sina, item.parser, sinaMap[item.sina]);
+      if (data) {
+        return {
+          ...item,
+          ...data,
+          status: 'ok',
+          source: 'sina',
+          updatedAt: new Date().toISOString(),
+        };
+      }
+      return { ...item, status: 'error', error: '暂无数据' };
+    }
+    if (eastmoneyById[item.id]) return eastmoneyById[item.id];
     return { ...item, status: 'skip' };
   });
 
@@ -197,7 +310,7 @@ function packIndexResults(allResults, flat) {
     name: group.region,
     indices: allResults
       .filter((item) => item.region === group.region && item.status === 'ok')
-      .map(({ region, status, error, sina, stooq, parser, source, ...rest }) => rest),
+      .map(({ region, status, error, sina, stooq, parser, eastmoney, source, ...rest }) => rest),
   }));
 
   const success = allResults.filter((r) => r.status === 'ok').length;
@@ -208,6 +321,7 @@ function packIndexResults(allResults, flat) {
     total: flat.length,
     success,
     failed,
+    fetchedAt: new Date().toISOString(),
   };
 }
 
@@ -216,30 +330,19 @@ async function fetchGlobalIndices() {
     group.items.map((item) => ({ ...item, region: group.region }))
   );
 
-  const sinaPack = await fetchGlobalIndicesSinaOnly();
-  const sinaOkIds = new Set(
-    sinaPack.regions.flatMap((r) => r.indices.map((i) => i.id))
-  );
+  let sinaMap = {};
+  try {
+    sinaMap = await fetchSinaBatch(flat.filter((i) => i.sina));
+  } catch {
+    sinaMap = {};
+  }
 
-  const stooqItems = flat.filter((i) => i.stooq && !sinaOkIds.has(i.id));
-  if (!stooqItems.length) return sinaPack;
-
-  const stooqResults = await fetchWithConcurrency(
-    stooqItems.map((item) => async () => fetchOneIndex(item, {})),
+  const results = await fetchWithConcurrency(
+    flat.map((item) => async () => fetchOneIndex(item, sinaMap)),
     4
   );
 
-  const merged = flat.map((item) => {
-    const sinaRow = sinaPack.regions
-      .flatMap((r) => r.indices)
-      .find((i) => i.id === item.id);
-    if (sinaRow) return { ...item, ...sinaRow, status: 'ok' };
-    const stooqRow = stooqResults.find((r) => r.id === item.id);
-    if (stooqRow?.status === 'ok') return stooqRow;
-    return { ...item, status: 'error', error: '暂无数据' };
-  });
-
-  return packIndexResults(merged, flat);
+  return packIndexResults(results, flat);
 }
 
 async function fetchWithConcurrency(tasks, limit = 3) {

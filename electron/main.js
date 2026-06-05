@@ -2,7 +2,7 @@ const { app, BrowserWindow, ipcMain, shell, Notification } = require('electron')
 const path = require('path');
 const { getUserDataDir, migrateUserDataFromRoaming } = require('../services/data-paths');
 const { version: APP_VERSION } = require('../package.json');
-const { fetchAllData, fetchIndicesLive, fetchIndicesQuick, invalidateDataCache, getCachedAllData, scheduleBackgroundRefresh, setDataRefreshListener, fetchFedLive, refreshFedInBackground, patchSourceInCache } = require('../services/data-fetcher');
+const { fetchAllData, fetchIndicesLive, refreshIndicesInBackground, fetchIndicesQuick, invalidateDataCache, getCachedAllData, scheduleBackgroundRefresh, setDataRefreshListener, fetchFedLive, refreshFedInBackground, patchSourceInCache } = require('../services/data-fetcher');
 const config = require('../services/config');
 const { warmAllCaches, getStartupSnapshot, getPushStartupPayload, prefetchAfterStartup, flushAllCaches } = require('../services/cache-store');
 const { localizeErrorMessage } = require('../services/translate');
@@ -65,6 +65,18 @@ function hashCommoditiesPayload(data) {
   const priceSig = items
     .filter((i) => i.price != null)
     .slice(0, 12)
+    .map((i) => `${i.id}:${i.price}:${i.changePct}`)
+    .join('|');
+  return `${stamp}|${items.length}|${priceSig}`;
+}
+
+function hashIndicesPayload(data) {
+  if (!data?.regions?.length) return '';
+  const stamp = data.fetchedAt || data.liveRefreshedAt || '';
+  const items = data.regions.flatMap((r) => r.indices || []);
+  const priceSig = items
+    .filter((i) => i.price != null)
+    .slice(0, 18)
     .map((i) => `${i.id}:${i.price}:${i.changePct}`)
     .join('|');
   return `${stamp}|${items.length}|${priceSig}`;
@@ -209,6 +221,7 @@ function makeCentralBankPushTick() {
 }
 
 const pushCycleSteps = [
+  { name: 'indices', run: null },
   { name: 'commodities', run: null },
   { name: 'forex', run: null },
   { name: 'policy', run: null },
@@ -220,24 +233,29 @@ const pushCycleSteps = [
 
 function initPushCycleSteps() {
   pushCycleSteps[0].run = makePushTick(
+    fetchIndicesLive,
+    refreshIndicesInBackground,
+    pushIndicesLiveToRenderer
+  );
+  pushCycleSteps[1].run = makePushTick(
     fetchCommoditiesLive,
     refreshCommoditiesLiveInBackground,
     pushCommoditiesLiveToRenderer
   );
-  pushCycleSteps[1].run = makePushTick(fetchForexLive, refreshForexLiveInBackground, pushForexLiveToRenderer);
-  pushCycleSteps[2].run = makePushTick(fetchPolicyLive, refreshPolicyLiveInBackground, pushPolicyLiveToRenderer);
-  pushCycleSteps[3].run = makePushTick(
+  pushCycleSteps[2].run = makePushTick(fetchForexLive, refreshForexLiveInBackground, pushForexLiveToRenderer);
+  pushCycleSteps[3].run = makePushTick(fetchPolicyLive, refreshPolicyLiveInBackground, pushPolicyLiveToRenderer);
+  pushCycleSteps[4].run = makePushTick(
     fetchGeopoliticsLive,
     refreshGeopoliticsInBackground,
     pushGeopoliticsLiveToRenderer
   );
-  pushCycleSteps[4].run = makePushTick(fetchClimateLive, refreshClimateInBackground, pushClimateLiveToRenderer);
-  pushCycleSteps[5].run = makePushTick(
+  pushCycleSteps[5].run = makePushTick(fetchClimateLive, refreshClimateInBackground, pushClimateLiveToRenderer);
+  pushCycleSteps[6].run = makePushTick(
     fetchCommodityOutlookLive,
     refreshCommodityOutlookInBackground,
     pushOutlookLiveToRenderer
   );
-  pushCycleSteps[6].run = makeCentralBankPushTick();
+  pushCycleSteps[7].run = makeCentralBankPushTick();
 }
 
 async function runPushCycle(force = false) {
@@ -316,6 +334,11 @@ function pushCommoditiesLiveToRenderer(data) {
   pushToRenderer('commodities-live', data, hashCommoditiesPayload);
 }
 
+function pushIndicesLiveToRenderer(data) {
+  if (!data?.regions?.some((r) => r.indices?.length)) return;
+  pushToRenderer('indices-live', data, hashIndicesPayload);
+}
+
 function getCentralBankRefreshMs() {
   const seconds = config.readConfig().policyRefreshSeconds;
   const resolved = Number.isFinite(seconds) ? seconds : 30;
@@ -331,6 +354,7 @@ function hasLivePushPayload(data) {
     data?.pairs?.length ||
     data?.items?.length ||
     data?.exchanges?.some((ex) => ex.items?.length) ||
+    data?.regions?.some((r) => r.indices?.length) ||
     data?.categories?.length ||
     data?.instruments?.length ||
     hasCentralBankPayload(data)
@@ -490,7 +514,9 @@ ipcMain.handle('fetch-indices-quick', async () => {
 
 ipcMain.handle('fetch-indices-live', async () => {
   try {
-    return await fetchIndicesLive();
+    const data = await fetchIndicesLive();
+    if (!data?.error) pushIndicesLiveToRenderer(data);
+    return data;
   } catch (err) {
     return { error: localizeErrorMessage(err.message || '行情更新失败') };
   }

@@ -2025,6 +2025,31 @@ body {
   margin-top: 2px;
 }
 
+.index-stale-badge,
+.index-error-badge {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 5px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 600;
+  vertical-align: middle;
+}
+
+.index-stale-badge {
+  color: #b45309;
+  background: rgba(245, 158, 11, 0.15);
+}
+
+.index-error-badge {
+  color: #b91c1c;
+  background: rgba(239, 68, 68, 0.12);
+}
+
+.index-card-stale {
+  border-style: dashed;
+}
+
 .index-card-clickable {
   cursor: pointer;
 }
