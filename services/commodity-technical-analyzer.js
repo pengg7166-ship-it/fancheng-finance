@@ -334,7 +334,7 @@ function classifyVolRegime(percentile) {
   return { regime: 'normal', label: '常态波', trend: 'flat' };
 }
 
-function computeSmoothedVolMetrics(bars, { intraday, sectorPrior, commodityId } = {}) {
+function computeSmoothedVolMetrics(bars, { intraday, sectorPrior, commodityId, skipVolPersist = false } = {}) {
   const closes = (bars || []).map((b) => b.close).filter((c) => c > 0);
   const barCount = closes.length;
   const prior = sectorPrior ?? 0.75;
@@ -344,7 +344,13 @@ function computeSmoothedVolMetrics(bars, { intraday, sectorPrior, commodityId } 
     const rawForecast = intradayProxy != null ? intradayProxy * 0.55 + prior * 0.45 : prior;
     const prevForecast = commodityId ? readPrevVolForecast(commodityId) : null;
     let volForecastPct = capVolForecastDayOverDay(Math.max(0.1, rawForecast), prevForecast) ?? Math.max(0.1, rawForecast);
-    if (commodityId && volForecastPct > 0) writeVolForecast(commodityId, volForecastPct);
+    if (commodityId && volForecastPct > 0 && !skipVolPersist) {
+      try {
+        writeVolForecast(commodityId, volForecastPct);
+      } catch {
+        // ignore
+      }
+    }
     const regimeInfo = classifyVolRegime(50);
     return {
       sigma20: +prior.toFixed(4),
@@ -410,8 +416,12 @@ function computeSmoothedVolMetrics(bars, { intraday, sectorPrior, commodityId } 
   let volForecastPct = capVolForecastDayOverDay(rawForecast, prevForecast);
   if (volForecastPct == null) volForecastPct = rawForecast;
 
-  if (commodityId && volForecastPct > 0) {
-    writeVolForecast(commodityId, volForecastPct);
+  if (commodityId && volForecastPct > 0 && !skipVolPersist) {
+    try {
+      writeVolForecast(commodityId, volForecastPct);
+    } catch {
+      // 回测批量写入时忽略波动预测缓存失败
+    }
   }
 
   const percentile =
@@ -639,6 +649,7 @@ function analyzeInstrumentTechnicalsFromBars(commodityId, bars = [], liveQuote =
     intraday,
     sectorPrior: options.sectorPrior,
     commodityId: meta.id,
+    skipVolPersist: Boolean(options.skipVolPersist),
   });
   const volatilityProxy = smoothedVol?.volForecastPct ?? computeVolatilityProxy({ historicalVol, liveQuote, intraday });
   const techScore = technicalScoreFromIndicators({ boll, maStack, volume, oi, intraday });

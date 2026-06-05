@@ -4,7 +4,7 @@
  */
 const { normalizeCommodityId } = require('./policy-commodity-map');
 
-const PHILOSOPHY_VERSION = 'v1.25.0';
+const PHILOSOPHY_VERSION = 'v1.26.0';
 
 const SUPPLY_SIDE_KEYWORDS = [
   '增产', '扩产', '库存高企', '供应过剩', '累库', '进口大增', '投放', '复产', '产能释放',
@@ -900,10 +900,12 @@ function evaluateInstrumentPhilosophy(ctx) {
   const finance = assessFinancialEnvironment(sources.fed, sources.boj, sources.forex, sources.indices, {
     prevRegime: financePrev,
   });
-  try {
-    require('./commodity-outlook-calibration').persistFinanceRegime(finance.regime);
-  } catch {
-    // ignore persistence errors
+  if (!ctx.skipRegimePersistence) {
+    try {
+      require('./commodity-outlook-calibration').persistFinanceRegime(finance.regime);
+    } catch {
+      // ignore persistence errors
+    }
   }
   const sdFinance = combineSdFinance(sd, finance);
 
@@ -951,6 +953,17 @@ function evaluateInstrumentPhilosophy(ctx) {
     priceFeedback,
   });
 
+  let compositeScore = composite.score;
+  const evm = ctx.eventMultipliers;
+  if (evm) {
+    if (evm.oilSpillover && evm.oilSpillover !== 1 && oil?.applicable) {
+      compositeScore = clamp(compositeScore + (oil.score ?? 0) * (evm.oilSpillover - 1) * 0.08, -1, 1);
+    }
+    if (evm.capitalSentiment && evm.capitalSentiment !== 1) {
+      compositeScore = clamp(compositeScore * (0.85 + evm.capitalSentiment * 0.15), -1, 1);
+    }
+  }
+
   const paradigmHint =
     sdFinance.paradigm0820 && finance.regime === 'loose'
       ? '08/20范式：供弱需强+联储放水 → 大幅走强'
@@ -972,7 +985,7 @@ function evaluateInstrumentPhilosophy(ctx) {
     boj: { score: bojScore, summary: finance.bojRate != null ? `日央行利率 ${finance.bojRate}%` : '日央行' },
     macroChina,
     ranked,
-    compositeScore: composite.score,
+    compositeScore: +compositeScore.toFixed(4),
     contributions: composite.contributions,
     secondaryDominates: ranked.secondaryDominates,
     paradigmHint,

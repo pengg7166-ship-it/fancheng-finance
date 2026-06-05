@@ -22,12 +22,13 @@ const {
   readPrevVolForecast,
 } = require('./commodity-technical-analyzer');
 const philosophy = require('./commodity-outlook-philosophy');
+const eventCalendar = require('./commodity-outlook-event-calendar');
 
 const OUTLOOK_DISK_KEY = 'commodity-outlook-v4.json';
 const OUTLOOK_DISK_TTL_MS = 60 * 1000;
 const OUTLOOK_RECOMPUTE_DEBOUNCE_MS = 800;
 const PRICE_OI_CHANGE_THRESHOLD_PCT = 0.15;
-const OUTLOOK_ENGINE_VERSION = 'v1.25.0';
+const OUTLOOK_ENGINE_VERSION = 'v1.26.0';
 
 /** 市场研判环境（条件权重，非固定） */
 const REGIME_IDS = ['riskOn', 'riskOff', 'liquidityPanic', 'supplyShock', 'weatherShock', 'neutral'];
@@ -244,6 +245,24 @@ function loadBacktestSummarySafe() {
   } catch {
     return null;
   }
+}
+
+function loadLongrunSummarySafe() {
+  try {
+    return require('./commodity-outlook-backtest').loadLongrunSummary();
+  } catch {
+    return null;
+  }
+}
+
+function applyLiveMacroEventMultipliers(macroScores, multipliers = {}) {
+  const m = multipliers || {};
+  return {
+    ...macroScores,
+    fed: (macroScores.fed ?? 0) * (m.macroFed ?? 1),
+    geo: (macroScores.geo ?? 0) * (m.macroGeo ?? 1),
+    china: (macroScores.china ?? 0) * (m.macroChina ?? 1),
+  };
 }
 
 function countOutlookDataSources(sources = {}) {
@@ -1838,6 +1857,12 @@ function buildInstrumentOutlooks(sources, globalCtx = null) {
       const newsFactor = { score: newsImpact.score, hits: newsImpact.hits, hitCount: newsImpact.hitCount };
       const sourceLaneCount = countOutlookDataSources(sources);
 
+      const today = new Date().toISOString().slice(0, 10);
+      const eventCtx = eventCalendar.getActiveEventsMerged(today, {
+        instrumentId: spec.id,
+        sector: spec.sector,
+      });
+
       const phil = philosophy.evaluateInstrumentPhilosophy({
         meta,
         profile,
@@ -1848,6 +1873,7 @@ function buildInstrumentOutlooks(sources, globalCtx = null) {
         newsImpact,
         sectorVolumeRank: sectorRanks[spec.id],
         changePct: mergedQuote.changePct,
+        eventMultipliers: eventCtx.weightMultipliers,
       });
 
       const ctx = evaluateContext(sources, {
@@ -1859,7 +1885,8 @@ function buildInstrumentOutlooks(sources, globalCtx = null) {
       const regime = ctx.regime !== 'neutral' ? ctx.regime : sharedCtx.regime;
       const regimeLabel = REGIME_LABELS[regime] || regime;
 
-      const macroScores = buildMacroScoresForInstrument(sources, spec.bucket);
+      let macroScores = buildMacroScoresForInstrument(sources, spec.bucket);
+      macroScores = applyLiveMacroEventMultipliers(macroScores, eventCtx.weightMultipliers);
       const capitalAttention = computeCapitalAttention(technical, liveQuote, sectorRanks[spec.id]);
       const inventoryScore = computeInventoryScore(technical, profile);
       const weatherScore = computeWeatherScore(macroScores.climate, profile);
@@ -1889,7 +1916,9 @@ function buildInstrumentOutlooks(sources, globalCtx = null) {
       delete factorBreakdown._regime;
       delete factorBreakdown._regimeMultipliers;
 
-      const factorComposite = clamp((factorBreakdown._sum ?? 0) + (volBiasParts.volBias || 0), -1, 1);
+      let factorComposite = clamp((factorBreakdown._sum ?? 0) + (volBiasParts.volBias || 0), -1, 1);
+      const capMult = eventCtx.weightMultipliers?.capitalSentiment ?? 1;
+      if (capMult !== 1) factorComposite = clamp(factorComposite * capMult, -1, 1);
       delete factorBreakdown._sum;
       if (volBiasParts.volForecastPct != null) {
         factorBreakdown.volForecastPct = +volBiasParts.volForecastPct.toFixed(2);
@@ -1920,8 +1949,10 @@ function buildInstrumentOutlooks(sources, globalCtx = null) {
       factorBreakdown.macroBoj =
         (macroScores.boj ?? 0) * (profile.macroSensitivity?.fed ?? 0.5) * (profile.factorWeights?.macroFed ?? 0.08);
 
-      const philosophyScore = phil.compositeScore ?? 0;
-      const blend = outlookCalibration.getCompositeWeights();
+      let philosophyScore = phil.compositeScore ?? 0;
+      const philMult = eventCtx.weightMultipliers?.philosophy ?? 1;
+      if (philMult !== 1) philosophyScore = clamp(philosophyScore * philMult, -1, 1);
+      const blend = outlookCalibration.getCompositeWeights(today, eventCtx);
       const compositeScoreRaw = clamp(
         philosophyScore * blend.philosophyWeight +
           adaptive.compositeScore * blend.adaptiveWeight +
@@ -2269,6 +2300,7 @@ function buildCommodityOutlookFromSources(sources = {}) {
 
   const dataQuality = countOutlookDataSources(sources);
   const backtestSummary = loadBacktestSummarySafe();
+  const longrunSummary = loadLongrunSummarySafe();
 
   const techReady = instruments.filter((i) => i.factors?.technical?.hasEnough).length;
 
@@ -2282,7 +2314,7 @@ function buildCommodityOutlookFromSources(sources = {}) {
     framework: {
       logicModel:
         '核心：供需×金融环境矩阵 → 主/次矛盾分级 → 现价反馈+资金情绪 → 技术/双速通道校验 → 四情景区间',
-      philosophyModel: 'Price = Supply/Demand × Financial Environment（v1.25 哲学层优先+回测校准）',
+      philosophyModel: 'Price = Supply/Demand × Financial Environment（v1.26 事件加权+长周期校准）',
       philosophyMatrix: philosophy.SD_FINANCE_MATRIX,
       horizons: HORIZON_LABELS,
       factorIds: FACTOR_DEFS.map((f) => f.id),
@@ -2306,7 +2338,12 @@ function buildCommodityOutlookFromSources(sources = {}) {
       directionHitRate7d: outlookHistory.getDirectionHitRate7d(),
       backtestHitRate30d: backtestSummary?.overallHitRate30d ?? null,
       backtestHitRate60d: backtestSummary?.overallHitRate60d ?? null,
+      longRunHitRate: longrunSummary?.overallHitRate ?? outlookCalibration.getLongRunHitRate?.() ?? null,
+      longRunPeriodFrom: longrunSummary?.periodFrom ?? '2019-01-01',
+      longRunPeriodTo: longrunSummary?.periodTo ?? null,
+      longRunByEra: longrunSummary?.byEra ?? null,
       backtestRunAt: backtestSummary?.runAt ?? null,
+      longRunRunAt: longrunSummary?.runAt ?? null,
       calibrationPath: outlookCalibration.getCalibrationPath(),
       backtestSummaryPath: (() => {
         try {
@@ -2357,8 +2394,11 @@ async function fetchCommodityOutlookSource(sources) {
   payload.stats.todayArchiveCount = outlookHistory.countTodayArchiveEntries();
   payload.stats.directionHitRate7d = outlookHistory.getDirectionHitRate7d();
   const bt = loadBacktestSummarySafe();
+  const lr = loadLongrunSummarySafe();
   payload.stats.backtestHitRate30d = bt?.overallHitRate30d ?? null;
   payload.stats.backtestHitRate60d = bt?.overallHitRate60d ?? null;
+  payload.stats.longRunHitRate = lr?.overallHitRate ?? outlookCalibration.getLongRunHitRate?.() ?? null;
+  payload.stats.longRunByEra = lr?.byEra ?? null;
   payload.stats.calibrationPath = outlookCalibration.getCalibrationPath();
   payload.stats.dailySnapshotPath = outlookHistory.getDailySummaryPath();
   diskCache.write(OUTLOOK_DISK_KEY, { data: payload, savedAt: Date.now() });

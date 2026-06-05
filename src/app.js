@@ -89,7 +89,9 @@ let policyCommodityNewsLoading = null;
 let outlookSectorFilter = 'all';
 let outlookSelectedInstrumentId = null;
 let outlookBacktestRunning = false;
+let outlookLongrunRunning = false;
 let outlookBacktestSummaryCache = null;
+let outlookLongrunSummaryCache = null;
 const OUTLOOK_PRICE_PATCH_MIN_MS = 1000;
 const outlookPricePatchAtById = new Map();
 
@@ -2785,10 +2787,36 @@ function mergeBacktestIntoOutlookInstruments(instruments, summary) {
       ...inst,
       backtestHitRate30d: hit.hitRate30d ?? inst.backtestHitRate30d,
       backtestHitRate60d: hit.hitRate60d ?? inst.backtestHitRate60d,
+      backtestHitRateLongrun: hit.hitRate ?? hit.hitRateLongrun ?? inst.backtestHitRateLongrun,
       backtestAvgGapPct: hit.avgGapPct ?? inst.backtestAvgGapPct,
       backtestSampleLast10: hit.sampleLast10,
     };
   });
+}
+
+function mergeLongrunIntoOutlookInstruments(instruments, summary) {
+  if (!instruments?.length || !summary?.instruments?.length) return instruments;
+  const byId = new Map(summary.instruments.map((r) => [String(r.id).toLowerCase(), r]));
+  return instruments.map((inst) => {
+    const hit = byId.get(String(inst.id).toLowerCase());
+    if (!hit) return inst;
+    return {
+      ...inst,
+      backtestHitRateLongrun: hit.hitRate ?? inst.backtestHitRateLongrun,
+      backtestLongrunHits: hit.hits,
+      backtestLongrunTotal: hit.total,
+      backtestLongrunStart: hit.startDate,
+      backtestLongrunEnd: hit.endDate,
+    };
+  });
+}
+
+async function loadOutlookLongrunSummaryCache() {
+  if (!window.fancheng?.getOutlookLongrunSummary) return null;
+  const data = await window.fancheng.getOutlookLongrunSummary();
+  if (data?.error) return null;
+  outlookLongrunSummaryCache = data.summary || null;
+  return outlookLongrunSummaryCache;
 }
 
 async function loadOutlookBacktestSummaryCache() {
@@ -2797,6 +2825,56 @@ async function loadOutlookBacktestSummaryCache() {
   if (data?.error) return null;
   outlookBacktestSummaryCache = data.summary || null;
   return outlookBacktestSummaryCache;
+}
+
+async function runOutlookLongrunBacktestUi(panel) {
+  if (outlookLongrunRunning || outlookBacktestRunning || !window.fancheng?.runOutlookBacktest) return;
+  outlookLongrunRunning = true;
+  window.__outlookBacktestProgress = { phase: 'init', pct: 0, message: '启动长周期回测…', mode: 'longrun-2019' };
+  const slot = panel?.querySelector('.outlook-backtest-progress-slot');
+  if (slot) slot.innerHTML = renderOutlookBacktestProgress(window.__outlookBacktestProgress);
+  const btn = panel?.querySelector('[data-action="run-outlook-longrun-backtest"]');
+  if (btn) btn.disabled = true;
+
+  try {
+    const summary = await window.fancheng.runOutlookBacktest({ mode: 'longrun-2019', force: true });
+    if (summary?.error) {
+      window.__outlookBacktestProgress = { phase: 'error', pct: 0, message: summary.error };
+    } else {
+      outlookLongrunSummaryCache = summary;
+      window.__outlookBacktestProgress = {
+        phase: 'done',
+        pct: 100,
+        message: `长周期回测完成 · ${summary.runtimeEstimate || ''}`,
+      };
+      if (window.__outlookCacheInstruments?.length) {
+        window.__outlookCacheInstruments = mergeLongrunIntoOutlookInstruments(
+          window.__outlookCacheInstruments,
+          summary
+        );
+      }
+      if (window.__outlookCacheStats) {
+        window.__outlookCacheStats.longRunHitRate = summary.overallHitRate;
+        window.__outlookCacheStats.longRunByEra = summary.byEra;
+      }
+      showOutlookLongrunResultsModal(summary);
+      if (outlookSelectedInstrumentId) updateOutlookDetailPanel(panel, outlookSelectedInstrumentId);
+    }
+  } catch (err) {
+    window.__outlookBacktestProgress = { phase: 'error', pct: 0, message: err?.message || '长周期回测失败' };
+  } finally {
+    outlookLongrunRunning = false;
+    if (btn) btn.disabled = false;
+    if (slot) slot.innerHTML = renderOutlookBacktestProgress(window.__outlookBacktestProgress);
+    const hitEl = panel?.querySelector('.outlook-hit-rate, .outlook-hit-rate-longrun');
+    if (hitEl && window.__outlookCacheStats) {
+      const actions = panel?.querySelector('.outlook-toolbar-actions');
+      const badges = actions?.querySelectorAll('.outlook-hit-rate, .outlook-hit-rate-longrun');
+      const html = renderOutlookHitRateBadge(window.__outlookCacheStats);
+      if (badges?.length) badges.forEach((b) => b.remove());
+      actions?.insertAdjacentHTML('beforeend', html);
+    }
+  }
 }
 
 async function runOutlookBacktestUi(panel) {
@@ -2837,6 +2915,43 @@ async function runOutlookBacktestUi(panel) {
     const hitEl = panel?.querySelector('.outlook-hit-rate');
     if (hitEl && window.__outlookCacheStats) hitEl.outerHTML = renderOutlookHitRateBadge(window.__outlookCacheStats);
   }
+}
+
+function renderOutlookLongrunEraTable(summary) {
+  const byEra = summary?.byEra || outlookLongrunSummaryCache?.byEra;
+  if (!byEra) return '<p class="outlook-accuracy-empty">暂无时代分段数据</p>';
+  const rows = Object.entries(byEra)
+    .map(([, era]) => {
+      const pct = era.hitRate != null ? `${Math.round(era.hitRate * 100)}%` : '—';
+      return `<tr><td>${escapeHtml(era.label || '')}</td><td>${pct}</td><td>${era.hits ?? '—'}/${era.total ?? '—'}</td></tr>`;
+    })
+    .join('');
+  return `<table class="outlook-backtest-era-table">
+    <thead><tr><th>宏观时代</th><th>方向命中率</th><th>样本</th></tr></thead>
+    <tbody>${rows}</tbody>
+  </table>`;
+}
+
+function showOutlookLongrunResultsModal(summary) {
+  const panel = document.getElementById('panel-outlook');
+  if (!panel) return;
+  let modal = panel.querySelector('.outlook-longrun-modal');
+  if (!modal) {
+    modal = document.createElement('div');
+    modal.className = 'outlook-longrun-modal outlook-backtest-modal outlook-history-modal';
+    modal.innerHTML =
+      '<div class="outlook-history-dialog outlook-backtest-dialog"><header><h4>长周期回测 2019- · 时代命中率</h4><button type="button" class="outlook-history-close" data-action="close-outlook-longrun">×</button></header><div class="outlook-backtest-body"></div></div>';
+    panel.appendChild(modal);
+  }
+  const body = modal.querySelector('.outlook-backtest-body');
+  const overall = summary?.overallHitRate != null ? `${Math.round(summary.overallHitRate * 100)}%` : '—';
+  const samples = summary?.sampleHitRates || {};
+  const fmt = (r) => (r?.hitRate != null ? `${Math.round(r.hitRate * 100)}%` : '—');
+  body.innerHTML = `<p class="outlook-backtest-overall">2019→今 整体 ${overall} · ${summary?.instrumentCount ?? 0} 品种 · 耗时 ${escapeHtml(summary?.runtimeEstimate || '—')}</p>
+    <p class="outlook-backtest-samples">au ${fmt(samples.au)} · cu ${fmt(samples.cu)} · sc ${fmt(samples.sc)} · FG ${fmt(samples.FG)}</p>
+    ${renderOutlookLongrunEraTable(summary)}
+    ${renderOutlookBacktestSectorTable(summary.bySector ? { bySector: Object.fromEntries(Object.entries(summary.bySector).map(([k, v]) => [k, { hitRate30d: v.hitRate, hitRate60d: null, total60d: v.total }])) } : null)}`;
+  modal.hidden = false;
 }
 
 function showOutlookBacktestResultsModal(summary) {
@@ -3045,13 +3160,19 @@ function renderOutlookMacroStrip(factors) {
 }
 
 function renderOutlookHitRateBadge(stats) {
+  const longRun = stats?.longRunHitRate;
+  const longRunBadge =
+    longRun != null
+      ? `<span class="outlook-hit-rate outlook-hit-rate-longrun" title="2019→今 walk-forward 长周期方向命中率">长周期命中 2019-now ${Math.round(longRun * 100)}%</span>`
+      : '';
   const bt30 = stats?.backtestHitRate30d;
   const bt60 = stats?.backtestHitRate60d;
   if (bt30 != null || bt60 != null) {
     const p30 = bt30 != null ? Math.round(bt30 * 100) : '—';
     const p60 = bt60 != null ? Math.round(bt60 * 100) : '—';
-    return `<span class="outlook-hit-rate outlook-hit-rate-backtest" title="walk-forward回测方向命中率">回测命中率 30d ${p30}% · 60d ${p60}%</span>`;
+    return `${longRunBadge}<span class="outlook-hit-rate outlook-hit-rate-backtest" title="walk-forward回测方向命中率">回测命中率 30d ${p30}% · 60d ${p60}%</span>`;
   }
+  if (longRunBadge) return longRunBadge;
   const hit = stats?.directionHitRate7d;
   if (!hit || hit.total < 1) {
     return '<span class="outlook-hit-rate outlook-hit-rate-empty" title="运行回测或近7日校验后显示">回测命中率 —</span>';
@@ -3086,13 +3207,20 @@ function renderOutlookBacktestSectorTable(summary) {
 }
 
 function renderOutlookHistoricalBacktestBlock(inst) {
+  const hitLong = inst.backtestHitRateLongrun;
   const hit30 = inst.backtestHitRate30d;
   const sample = inst.backtestSampleLast10;
-  if (hit30 == null && !sample?.length) {
-    return '<p class="outlook-accuracy-empty">运行「运行回测」后显示 walk-forward 历史命中率</p>';
+  const eraTable = renderOutlookLongrunEraTable(inst.backtestByEra ? { byEra: inst.backtestByEra } : outlookLongrunSummaryCache);
+  if (hitLong == null && hit30 == null && !sample?.length && !outlookLongrunSummaryCache?.byEra) {
+    return '<p class="outlook-accuracy-empty">运行「运行回测」或「长周期 2019至今」后显示 walk-forward 历史命中率</p>';
   }
-  const pct = hit30 != null ? `${Math.round(hit30 * 100)}%` : '—';
+  const longPct = hitLong != null ? `${Math.round(hitLong * 100)}%` : '—';
+  const pct30 = hit30 != null ? `${Math.round(hit30 * 100)}%` : '—';
   const gap = inst.backtestAvgGapPct != null ? formatOutlookPctSign(inst.backtestAvgGapPct) : '—';
+  const longRange =
+    inst.backtestLongrunStart && inst.backtestLongrunEnd
+      ? `${inst.backtestLongrunStart}→${inst.backtestLongrunEnd}`
+      : '2019→今';
   const sampleRows = (sample || [])
     .slice(-10)
     .map(
@@ -3102,9 +3230,12 @@ function renderOutlookHistoricalBacktestBlock(inst) {
     .join('');
   return `<div class="outlook-historical-backtest">
     <ul class="outlook-historical-stats">
-      <li>30日方向命中 <strong>${pct}</strong></li>
+      <li>长周期 ${escapeHtml(longRange)} 方向命中 <strong>${longPct}</strong>${inst.backtestLongrunTotal ? ` <span class="outlook-hit-sample">(${inst.backtestLongrunHits}/${inst.backtestLongrunTotal})</span>` : ''}</li>
+      <li>近30日方向命中 <strong>${pct30}</strong></li>
       <li>预测中心平均差距 <strong>${gap}</strong></li>
     </ul>
+    <h6 class="outlook-era-subhead">时代分段（COVID / 加息 / 俄乌 / 反内卷 / 2026地缘）</h6>
+    ${eraTable}
     ${sampleRows ? `<table class="outlook-accuracy-table outlook-backtest-sample"><thead><tr><th>日期</th><th>预测</th><th>实际</th><th>命中</th></tr></thead><tbody>${sampleRows}</tbody></table>` : ''}
   </div>`;
 }
@@ -3116,7 +3247,8 @@ function renderOutlookToolbar(source, sectors, sectorCounts, activeSector) {
     ${renderOutlookSectorTabs(sectors, activeSector, sectorCounts)}
     <div class="outlook-toolbar-actions">
       <span class="outlook-toolbar-stamp">研判更新 ${escapeHtml(stampLabel)}</span>
-      <button type="button" class="btn-link outlook-toolbar-backtest" data-action="run-outlook-backtest"${outlookBacktestRunning ? ' disabled' : ''}>运行回测</button>
+      <button type="button" class="btn-link outlook-toolbar-backtest" data-action="run-outlook-backtest"${outlookBacktestRunning ? ' disabled' : ''} title="近60日 walk-forward">运行回测</button>
+      <button type="button" class="btn-link outlook-toolbar-longrun" data-action="run-outlook-longrun-backtest"${outlookLongrunRunning || outlookBacktestRunning ? ' disabled' : ''} title="2019→今 walk-forward，首次约需数分钟">长周期 2019至今</button>
       <button type="button" class="btn-link outlook-toolbar-archive" data-action="open-outlook-history-global">研判存档</button>
       <button type="button" class="btn-link outlook-toolbar-daily-compare" data-action="open-outlook-daily-compare">每日对照</button>
       ${renderOutlookHitRateBadge(source.stats)}
@@ -3828,6 +3960,15 @@ async function activateOutlookTab() {
     void window.fancheng.bootstrapOutlookDaily();
   }
   void loadOutlookBacktestSummaryCache();
+  void loadOutlookLongrunSummaryCache().then((lr) => {
+    if (lr?.instruments?.length && window.__outlookCacheInstruments?.length) {
+      window.__outlookCacheInstruments = mergeLongrunIntoOutlookInstruments(window.__outlookCacheInstruments, lr);
+    }
+    if (lr && window.__outlookCacheStats) {
+      window.__outlookCacheStats.longRunHitRate = lr.overallHitRate;
+      window.__outlookCacheStats.longRunByEra = lr.byEra;
+    }
+  });
   const panelEarly = document.getElementById('panel-outlook');
   if (panelEarly) setupOutlookBacktestListeners(panelEarly);
   const cached = getOutlookCachedSource();
@@ -4206,10 +4347,22 @@ function setupOutlookPanel() {
         void openOutlookDailyCompareModal();
         return;
       }
+      const runLongrun = e.target.closest('[data-action="run-outlook-longrun-backtest"]');
+      if (runLongrun) {
+        e.preventDefault();
+        void runOutlookLongrunBacktestUi(panel);
+        return;
+      }
       const runBacktest = e.target.closest('[data-action="run-outlook-backtest"]');
       if (runBacktest) {
         e.preventDefault();
         void runOutlookBacktestUi(panel);
+        return;
+      }
+      const closeLongrun = e.target.closest('[data-action="close-outlook-longrun"]');
+      if (closeLongrun) {
+        e.preventDefault();
+        panel.querySelector('.outlook-longrun-modal')?.setAttribute('hidden', '');
         return;
       }
       const closeBacktest = e.target.closest('[data-action="close-outlook-backtest"]');

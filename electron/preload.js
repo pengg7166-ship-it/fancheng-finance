@@ -42,6 +42,7 @@ contextBridge.exposeInMainWorld('fancheng', {
   bootstrapOutlookDaily: () => safeInvoke('bootstrap-outlook-daily'),
   runOutlookBacktest: (options) => safeInvoke('run-outlook-backtest', options),
   getOutlookBacktestSummary: () => safeInvoke('get-outlook-backtest-summary'),
+  getOutlookLongrunSummary: () => safeInvoke('get-outlook-longrun-summary'),
   onOutlookBacktestProgress: (callback) => {
     const handler = (_event, payload) => callback(payload);
     ipcRenderer.on('outlook-backtest-progress', handler);

@@ -212,7 +212,10 @@ app.whenReady().then(async () => {
   let backtestHitFieldOk = false;
   try {
     const backtest = require('../services/commodity-outlook-backtest');
-    backtestModuleOk = typeof backtest.runOutlookBacktest === 'function' && typeof backtest.loadBacktestSummary === 'function';
+    backtestModuleOk =
+      typeof backtest.runOutlookBacktest === 'function' &&
+      typeof backtest.runLongrunBacktest2019 === 'function' &&
+      typeof backtest.loadLongrunSummary === 'function';
     const calPath = require('../services/commodity-outlook-calibration').getCalibrationPath();
     backtestHitFieldOk = Boolean(engineProbe.stats?.backtestHitRate30d != null || engineProbe.stats?.calibrationPath || calPath);
   } catch (err) {

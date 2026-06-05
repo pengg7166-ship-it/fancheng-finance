@@ -767,19 +767,39 @@ ipcMain.handle('bootstrap-outlook-daily', async () => {
 
 ipcMain.handle('run-outlook-backtest', async (event, options = {}) => {
   try {
-    const { runOutlookBacktest } = require('../services/commodity-outlook-backtest');
+    const backtest = require('../services/commodity-outlook-backtest');
     const win = BrowserWindow.fromWebContents(event.sender);
-    const summary = await runOutlookBacktest({
+    const onProgress = (progress) => {
+      if (win && !win.isDestroyed()) {
+        win.webContents.send('outlook-backtest-progress', progress);
+      }
+    };
+    if (options.mode === 'longrun-2019') {
+      const summary = await backtest.runLongrunBacktest2019({
+        force: Boolean(options.force),
+        onProgress,
+      });
+      return summary;
+    }
+    const summary = await backtest.runOutlookBacktest({
       days: options.days ?? 60,
-      onProgress: (progress) => {
-        if (win && !win.isDestroyed()) {
-          win.webContents.send('outlook-backtest-progress', progress);
-        }
-      },
+      onProgress,
     });
     return summary;
   } catch (err) {
     return { error: localizeErrorMessage(err.message || '回测运行失败') };
+  }
+});
+
+ipcMain.handle('get-outlook-longrun-summary', async () => {
+  try {
+    const { loadLongrunSummary, getBacktestProgress } = require('../services/commodity-outlook-backtest');
+    return {
+      summary: loadLongrunSummary(),
+      progress: getBacktestProgress(),
+    };
+  } catch (err) {
+    return { error: localizeErrorMessage(err.message || '长周期回测摘要读取失败') };
   }
 });
 

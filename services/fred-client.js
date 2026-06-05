@@ -110,7 +110,36 @@ async function fetchFredBatch(seriesList) {
   return out;
 }
 
+function parseFredCsvFull(text) {
+  const lines = text.trim().split(/\r?\n/).slice(1);
+  const observations = [];
+  for (const line of lines) {
+    const comma = line.indexOf(',');
+    if (comma === -1) continue;
+    const date = line.slice(0, comma).trim();
+    const value = line.slice(comma + 1).trim();
+    if (!date || !value || value === '.') continue;
+    const num = parseFloat(value);
+    if (Number.isNaN(num)) continue;
+    observations.push({ date, value: num });
+  }
+  observations.sort((a, b) => a.date.localeCompare(b.date));
+  return observations;
+}
+
+async function fetchFredSeriesHistoryCsv(seriesId) {
+  const url = `https://fred.stlouisfed.org/graph/fredgraph.csv?id=${encodeURIComponent(seriesId)}`;
+  const text = await fetchText(url, {
+    timeout: 30000,
+    retries: 2,
+    headers: FRED_CSV_HEADERS,
+  });
+  return parseFredCsvFull(text);
+}
+
 module.exports = {
   fetchFredSeries,
   fetchFredBatch,
+  parseFredCsvFull,
+  fetchFredSeriesHistoryCsv,
 };
