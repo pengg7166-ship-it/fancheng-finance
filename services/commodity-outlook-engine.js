@@ -5,6 +5,7 @@ const diskCache = require('./disk-cache');
 const volModel = require('./commodity-volatility-model');
 const marketAdaptive = require('./commodity-market-adaptive');
 const outlookHistory = require('./commodity-outlook-history');
+const outlookCalibration = require('./commodity-outlook-calibration');
 const { normalizeCommodityId } = require('./policy-commodity-map');
 const { getCommodityMeta, getAllCommodities } = require('./commodities-catalog');
 const { getNewsKeywords, scoreNewsItem, getGlobalNewsPoolSync } = require('./commodities-news');
@@ -26,7 +27,7 @@ const OUTLOOK_DISK_KEY = 'commodity-outlook-v4.json';
 const OUTLOOK_DISK_TTL_MS = 60 * 1000;
 const OUTLOOK_RECOMPUTE_DEBOUNCE_MS = 800;
 const PRICE_OI_CHANGE_THRESHOLD_PCT = 0.15;
-const OUTLOOK_ENGINE_VERSION = 'v1.24.0';
+const OUTLOOK_ENGINE_VERSION = 'v1.25.0';
 
 /** 市场研判环境（条件权重，非固定） */
 const REGIME_IDS = ['riskOn', 'riskOff', 'liquidityPanic', 'supplyShock', 'weatherShock', 'neutral'];
@@ -235,6 +236,43 @@ function clampStars(n) {
 function starsToHtml(stars) {
   const n = clampStars(stars);
   return '★'.repeat(n) + '☆'.repeat(5 - n);
+}
+
+function loadBacktestSummarySafe() {
+  try {
+    return require('./commodity-outlook-backtest').loadBacktestSummary();
+  } catch {
+    return null;
+  }
+}
+
+function countOutlookDataSources(sources = {}) {
+  return [
+    sources.indices?.regions?.some((r) => r.indices?.length),
+    sources.forex?.pairs?.length || sources.forex?.groups?.length,
+    sources.policy?.items?.length,
+    sources.climate?.items?.length,
+    sources.geopolitics?.items?.length,
+    sources.fed?.indicators?.length,
+    sources.boj?.indicators?.length,
+    sources.commodities?.exchanges?.some((e) => e.items?.length),
+  ].filter(Boolean).length;
+}
+
+function applyNewsPriceConfirmation(newsImpact, changePct) {
+  const chg = Number(changePct);
+  if (!newsImpact || Number.isNaN(chg)) return newsImpact;
+  const damp =
+    (newsImpact.score > 0.05 && chg < -0.5) || (newsImpact.score < -0.05 && chg > 0.5);
+  if (!damp) return newsImpact;
+  return {
+    ...newsImpact,
+    shock: +(newsImpact.shock * 0.4).toFixed(3),
+    score: +(newsImpact.score * 0.4).toFixed(4),
+    shockDisplay: `${newsImpact.shock * 0.4 >= 0 ? '+' : ''}${(newsImpact.shock * 0.4).toFixed(2)}`,
+    summary: `${newsImpact.summary || ''} · 现价背离×0.4`.trim(),
+    priceDampened: true,
+  };
 }
 
 function scoreToDirection(score) {
@@ -1511,7 +1549,19 @@ function computeNextDayRangePct({
   };
 }
 
-function computeInstrumentConfidence({ hasLivePrice, hasEnough, dataPoints, newsHitCount, oiDelta, volumeRatio, compositeScore, smoothedVol }) {
+function computeInstrumentConfidence({
+  hasLivePrice,
+  hasEnough,
+  dataPoints,
+  newsHitCount,
+  oiDelta,
+  volumeRatio,
+  compositeScore,
+  smoothedVol,
+  sector,
+  instrumentId,
+  dataQuality,
+}) {
   let raw = 1;
   if (hasLivePrice) raw += 1.2;
   if (hasEnough) raw += 1.5;
@@ -1520,6 +1570,17 @@ function computeInstrumentConfidence({ hasLivePrice, hasEnough, dataPoints, news
   if (oiDelta != null) raw += 0.4;
   if (volumeRatio != null) raw += 0.25;
   raw += Math.abs(compositeScore || 0) * 1.2;
+  if (dataQuality != null && dataQuality < 3) raw -= 1.2;
+
+  const sectorHit = sector ? outlookCalibration.getSectorHitRate(sector, 60) : null;
+  const instHit = instrumentId ? outlookCalibration.getInstrumentHitRate(instrumentId, 30) : null;
+  const hitRate = instHit?.rate ?? sectorHit?.rate;
+  if (hitRate != null) {
+    if (hitRate >= 0.62) raw += 0.8;
+    else if (hitRate >= 0.55) raw += 0.4;
+    else if (hitRate < 0.45) raw -= 0.5;
+  }
+
   return adjustConfidenceForVolStability(raw, smoothedVol);
 }
 
@@ -1769,8 +1830,13 @@ function buildInstrumentOutlooks(sources, globalCtx = null) {
 
   return prepRows
     .map(({ spec, meta, profile, liveQuote, technical, mergedQuote }) => {
-      const newsImpact = scoreNewsImpactForInstrument(meta, profile, sources, newsPools);
+      const newsImpactRaw = scoreNewsImpactForInstrument(meta, profile, sources, newsPools);
+      const newsImpact = applyNewsPriceConfirmation(
+        newsImpactRaw,
+        mergedQuote.changePct ?? technical.intraday?.changePct
+      );
       const newsFactor = { score: newsImpact.score, hits: newsImpact.hits, hitCount: newsImpact.hitCount };
+      const sourceLaneCount = countOutlookDataSources(sources);
 
       const phil = philosophy.evaluateInstrumentPhilosophy({
         meta,
@@ -1855,14 +1921,28 @@ function buildInstrumentOutlooks(sources, globalCtx = null) {
         (macroScores.boj ?? 0) * (profile.macroSensitivity?.fed ?? 0.5) * (profile.factorWeights?.macroFed ?? 0.08);
 
       const philosophyScore = phil.compositeScore ?? 0;
-      const compositeScore = clamp(
-        philosophyScore * 0.58 + adaptive.compositeScore * 0.22 + factorComposite * 0.2,
+      const blend = outlookCalibration.getCompositeWeights();
+      const compositeScoreRaw = clamp(
+        philosophyScore * blend.philosophyWeight +
+          adaptive.compositeScore * blend.adaptiveWeight +
+          factorComposite * blend.factorWeight,
         -1,
         1
       );
 
-      const dirTier = scoreToDirectionTierWithVol(compositeScore, profile, technical.smoothedVol);
-      const direction = directionTierClass(dirTier.direction);
+      let compositeScore = compositeScoreRaw;
+      let dirTier = scoreToDirectionTierWithVol(compositeScore, profile, technical.smoothedVol);
+      let direction = directionTierClass(dirTier.direction);
+      let directionLabelOverride = null;
+      let insufficientData = false;
+
+      if (sourceLaneCount < 3) {
+        insufficientData = true;
+        direction = 'neutral';
+        directionLabelOverride = '数据不足·观望';
+        compositeScore = clamp(compositeScoreRaw * 0.35, -0.35, 0.35);
+        dirTier = scoreToDirectionTierWithVol(compositeScore, profile, technical.smoothedVol);
+      }
 
       const hasLivePrice = mergedQuote.price != null && !Number.isNaN(Number(mergedQuote.price));
       const outlookPending = !hasLivePrice;
@@ -1938,7 +2018,14 @@ function buildInstrumentOutlooks(sources, globalCtx = null) {
         volumeRatio: technical.volume?.ratio,
         compositeScore,
         smoothedVol: technical.smoothedVol,
+        sector: spec.sector,
+        instrumentId: spec.id,
+        dataQuality: sourceLaneCount,
       });
+
+      const backtestHit = outlookCalibration.getInstrumentHitRate(spec.id, 30);
+      const sectorBacktestHit = outlookCalibration.getSectorHitRate(spec.sector, 30);
+      const envBacktestHit = sectorBacktestHit?.rate ?? backtestHit?.rate;
 
       const bucketFactorScores = buildBucketFactorScores(sources, spec.bucket);
       const macroFactors = FACTOR_DEFS.map((def) => ({
@@ -2051,7 +2138,13 @@ function buildInstrumentOutlooks(sources, globalCtx = null) {
         direction,
         directionTier: dirTier.direction,
         directionArrow: dirTier.arrow,
-        directionLabel: dirTier.label,
+        directionLabel: directionLabelOverride || dirTier.label,
+        insufficientData,
+        dataQuality: sourceLaneCount,
+        secondaryDominates: phil.secondaryDominates || phil.ranked?.secondaryDominates,
+        backtestHitRate30d: backtestHit?.rate ?? null,
+        envBacktestHitRate: envBacktestHit ?? null,
+        calibrationWeights: blend,
         confidence,
         stars: confidence,
         starsHtml: starsToHtml(confidence),
@@ -2113,6 +2206,7 @@ function buildInstrumentOutlooks(sources, globalCtx = null) {
           primaryChip: phil.ranked?.primaryChip,
           secondaryChip: phil.ranked?.secondaryChip,
           primaryDriverId: phil.ranked?.primary?.[0]?.id || 'sdFinance',
+          secondaryDominates: phil.secondaryDominates || phil.ranked?.secondaryDominates,
         },
       };
       return outlookHistory.attachChangeDelta(row);
@@ -2173,16 +2267,8 @@ function buildCommodityOutlookFromSources(sources = {}) {
     };
   }
 
-  const dataQuality = [
-    sources.indices?.regions?.some((r) => r.indices?.length),
-    sources.forex?.pairs?.length || sources.forex?.groups?.length,
-    sources.policy?.items?.length,
-    sources.climate?.items?.length,
-    sources.geopolitics?.items?.length,
-    sources.fed?.indicators?.length,
-    sources.boj?.indicators?.length,
-    sources.commodities?.exchanges?.some((e) => e.items?.length),
-  ].filter(Boolean).length;
+  const dataQuality = countOutlookDataSources(sources);
+  const backtestSummary = loadBacktestSummarySafe();
 
   const techReady = instruments.filter((i) => i.factors?.technical?.hasEnough).length;
 
@@ -2196,7 +2282,7 @@ function buildCommodityOutlookFromSources(sources = {}) {
     framework: {
       logicModel:
         '核心：供需×金融环境矩阵 → 主/次矛盾分级 → 现价反馈+资金情绪 → 技术/双速通道校验 → 四情景区间',
-      philosophyModel: 'Price = Supply/Demand × Financial Environment（v1.24 哲学层优先）',
+      philosophyModel: 'Price = Supply/Demand × Financial Environment（v1.25 哲学层优先+回测校准）',
       philosophyMatrix: philosophy.SD_FINANCE_MATRIX,
       horizons: HORIZON_LABELS,
       factorIds: FACTOR_DEFS.map((f) => f.id),
@@ -2217,6 +2303,18 @@ function buildCommodityOutlookFromSources(sources = {}) {
       factorCount: factors.length,
       dataQuality,
       dataQualityLabel: `${dataQuality}/8 路数据源 · ${techReady}/${instruments.length} 品种技术面就绪`,
+      directionHitRate7d: outlookHistory.getDirectionHitRate7d(),
+      backtestHitRate30d: backtestSummary?.overallHitRate30d ?? null,
+      backtestHitRate60d: backtestSummary?.overallHitRate60d ?? null,
+      backtestRunAt: backtestSummary?.runAt ?? null,
+      calibrationPath: outlookCalibration.getCalibrationPath(),
+      backtestSummaryPath: (() => {
+        try {
+          return require('./commodity-outlook-backtest').getSummaryPath();
+        } catch {
+          return null;
+        }
+      })(),
     },
     updatedAt: new Date().toISOString(),
     liveRefreshedAt: new Date().toISOString(),
@@ -2258,6 +2356,10 @@ async function fetchCommodityOutlookSource(sources) {
   payload.stats = payload.stats || {};
   payload.stats.todayArchiveCount = outlookHistory.countTodayArchiveEntries();
   payload.stats.directionHitRate7d = outlookHistory.getDirectionHitRate7d();
+  const bt = loadBacktestSummarySafe();
+  payload.stats.backtestHitRate30d = bt?.overallHitRate30d ?? null;
+  payload.stats.backtestHitRate60d = bt?.overallHitRate60d ?? null;
+  payload.stats.calibrationPath = outlookCalibration.getCalibrationPath();
   payload.stats.dailySnapshotPath = outlookHistory.getDailySummaryPath();
   diskCache.write(OUTLOOK_DISK_KEY, { data: payload, savedAt: Date.now() });
   return payload;
@@ -2366,5 +2468,9 @@ module.exports = {
   buildPredictionRationale,
   buildHistoricalContext,
   OUTLOOK_ENGINE_VERSION,
+  scoreToDirection,
+  buildMacroScoresForInstrument,
+  parseVix,
+  countOutlookDataSources,
   philosophy,
 };

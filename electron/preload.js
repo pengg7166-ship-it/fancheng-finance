@@ -40,6 +40,13 @@ contextBridge.exposeInMainWorld('fancheng', {
   exportOutlookHistory: (instrumentId, days) => safeInvoke('export-outlook-history', instrumentId, days),
   getOutlookDailyCompare: (dateA, dateB) => safeInvoke('get-outlook-daily-compare', dateA, dateB),
   bootstrapOutlookDaily: () => safeInvoke('bootstrap-outlook-daily'),
+  runOutlookBacktest: (options) => safeInvoke('run-outlook-backtest', options),
+  getOutlookBacktestSummary: () => safeInvoke('get-outlook-backtest-summary'),
+  onOutlookBacktestProgress: (callback) => {
+    const handler = (_event, payload) => callback(payload);
+    ipcRenderer.on('outlook-backtest-progress', handler);
+    return () => ipcRenderer.removeListener('outlook-backtest-progress', handler);
+  },
   onForexLive: (callback) => {
     const handler = (_event, payload) => callback(payload);
     ipcRenderer.on('forex-live', handler);

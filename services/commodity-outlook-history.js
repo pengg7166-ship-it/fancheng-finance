@@ -547,6 +547,8 @@ function buildSnapshotRecord(inst, prev, dataVersion) {
     newsHits,
     regime: inst.regime,
     regimeLabel: inst.regimeLabel,
+    dataQuality: inst.dataQuality ?? null,
+    insufficientData: inst.insufficientData ?? false,
     dataVersion: dataVersion || inst.dataVersion || null,
   };
 

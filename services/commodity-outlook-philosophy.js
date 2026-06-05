@@ -4,7 +4,16 @@
  */
 const { normalizeCommodityId } = require('./policy-commodity-map');
 
-const PHILOSOPHY_VERSION = 'v1.24.0';
+const PHILOSOPHY_VERSION = 'v1.25.0';
+
+const SUPPLY_SIDE_KEYWORDS = [
+  '增产', '扩产', '库存高企', '供应过剩', '累库', '进口大增', '投放', '复产', '产能释放',
+  'supply surplus', 'inventory build', 'output increase',
+];
+const DEMAND_SIDE_KEYWORDS = [
+  '减产', '去库存', '去库', '短缺', '供不应求', '抢运', '补库', '需求回暖',
+  'destocking', 'shortage', 'demand recovery',
+];
 
 /** 供需状态：供强需弱 | 均衡 | 供弱需强 */
 const SD_STATES = {
@@ -90,6 +99,8 @@ const CLIMATE_DISASTER_MAP = [
 ];
 
 const SECONDARY_FACTOR_CAP = 0.15;
+const PRIMARY_STRONG_SECONDARY_CAP = 0.1;
+const PRIMARY_STRONG_THRESHOLD = 0.35;
 const WEIGHT_PRICE_FEEDBACK = { min: 0.22, max: 0.28, default: 0.25 };
 const WEIGHT_CAPITAL_SENTIMENT = { min: 0.18, max: 0.22, default: 0.2 };
 
@@ -202,18 +213,39 @@ function assessSupplyDemand(instrument, policy, climate, geo, inventory, news, m
   ingestItems(geo?.items, 0.85);
   ingestItems(climate?.items, isAgri ? 1.1 : 0.65);
 
+  for (const item of (policy?.items || []).slice(0, 30)) {
+    if (!itemRelevantToInstrument(item, id, aliases)) continue;
+    const text = `${item.title || ''} ${item.summary || ''}`;
+    if (textIncludesAny(text, SUPPLY_SIDE_KEYWORDS)) {
+      supplyPressure += 0.45;
+      weight += 0.35;
+    }
+    if (textIncludesAny(text, DEMAND_SIDE_KEYWORDS)) {
+      demandSupport += 0.45;
+      weight += 0.35;
+    }
+  }
+
   const inv = inventory || {};
   if (inv.deltaPct != null) {
-    const oiW = 0.6;
-    if (inv.deltaPct > 1.5) supplyPressure += oiW * 0.4;
-    else if (inv.deltaPct < -1.5) demandSupport += oiW * 0.4;
+    const oiW = 0.65;
+    if (inv.deltaPct > 2) supplyPressure += oiW * 0.55;
+    else if (inv.deltaPct > 1) supplyPressure += oiW * 0.35;
+    else if (inv.deltaPct < -2) demandSupport += oiW * 0.55;
+    else if (inv.deltaPct < -1) demandSupport += oiW * 0.35;
     weight += oiW;
   }
   if (inv.volumeRatio != null) {
     const vr = inv.volumeRatio;
-    if (vr > 1.3) demandSupport += 0.25;
-    else if (vr < 0.75) supplyPressure += 0.15;
-    weight += 0.3;
+    if (vr > 1.35) {
+      demandSupport += 0.28;
+      if (inv.deltaPct > 0.5) supplyPressure += 0.12;
+    } else if (vr < 0.72) supplyPressure += 0.18;
+    weight += 0.32;
+  }
+  if (inv.oiBuildDays != null && inv.oiBuildDays >= 3) {
+    supplyPressure += 0.25;
+    weight += 0.2;
   }
 
   if (news?.score != null && Math.abs(news.score) > 0.05) {
@@ -247,17 +279,64 @@ function assessSupplyDemand(instrument, policy, climate, geo, inventory, news, m
   };
 }
 
+function computeDffTrend(fed) {
+  const dffRow = findIndicator(fed?.indicators, 'DFF');
+  const dff = parseFloat(dffRow?.value);
+  const chg = parseFloat(dffRow?.change ?? dffRow?.changePct);
+  if (Number.isNaN(dff)) return { dff: null, trend: 0 };
+  let trend = 0;
+  if (!Number.isNaN(chg)) {
+    if (chg <= -0.15) trend += 0.18;
+    else if (chg >= 0.15) trend -= 0.18;
+  }
+  return { dff, trend };
+}
+
+function computeM2YoYProxy(fed) {
+  const m2 = findIndicator(fed?.indicators, 'M2SL');
+  const chg = parseFloat(m2?.change ?? m2?.changePct ?? m2?.yoy);
+  if (Number.isNaN(chg)) return { yoyProxy: null, score: 0 };
+  let score = 0;
+  if (chg >= 6) score += 0.14;
+  else if (chg >= 3) score += 0.08;
+  else if (chg <= 0) score -= 0.1;
+  return { yoyProxy: chg, score };
+}
+
+function applyFinanceRegimeHysteresis(rawScore, prevRegime = 'neutral') {
+  const ENTER_LOOSE = 0.26;
+  const EXIT_LOOSE = 0.14;
+  const ENTER_TIGHT = -0.26;
+  const EXIT_TIGHT = -0.14;
+  let regime = prevRegime || 'neutral';
+
+  if (regime === 'loose') {
+    if (rawScore <= EXIT_LOOSE && rawScore <= ENTER_TIGHT) regime = 'tight';
+    else if (rawScore <= EXIT_LOOSE) regime = 'neutral';
+  } else if (regime === 'tight') {
+    if (rawScore >= EXIT_TIGHT && rawScore >= ENTER_LOOSE) regime = 'loose';
+    else if (rawScore >= EXIT_TIGHT) regime = 'neutral';
+  } else if (rawScore >= ENTER_LOOSE) {
+    regime = 'loose';
+  } else if (rawScore <= ENTER_TIGHT) {
+    regime = 'tight';
+  } else {
+    regime = 'neutral';
+  }
+
+  return regime;
+}
+
 /**
- * 金融环境：Fed + BOJ + DXY + 美股/VIX → loose|neutral|tight
+ * 金融环境：DFF趋势 + M2 YoY代理 + VIX + DXY + 美股 → loose|neutral|tight（带滞后）
  */
-function assessFinancialEnvironment(fed, boj, forex, indices) {
+function assessFinancialEnvironment(fed, boj, forex, indices, options = {}) {
   let score = 0;
   const parts = [];
 
-  const dff = parseFloat(findIndicator(fed?.indicators, 'DFF')?.value);
+  const { dff, trend: dffTrend } = computeDffTrend(fed);
   const vix = parseFloat(findIndicator(fed?.indicators, 'VIXCLS')?.value);
-  const m2 = findIndicator(fed?.indicators, 'M2SL');
-  const m2Change = parseFloat(m2?.change);
+  const { yoyProxy: m2YoY, score: m2Score } = computeM2YoYProxy(fed);
   const spread = parseFloat(findIndicator(fed?.indicators, 'T10Y2Y')?.value);
 
   if (!Number.isNaN(dff)) {
@@ -267,7 +346,10 @@ function assessFinancialEnvironment(fed, boj, forex, indices) {
     else if (dff >= 4) score -= 0.22;
     parts.push(`FFR ${dff.toFixed(2)}%`);
   }
-  if (!Number.isNaN(m2Change) && m2Change > 0) score += 0.1;
+  score += dffTrend;
+  if (dffTrend !== 0) parts.push(`FFR趋势${dffTrend > 0 ? '↓' : '↑'}`);
+  score += m2Score;
+  if (m2YoY != null) parts.push(`M2 YoY代理 ${m2YoY >= 0 ? '+' : ''}${m2YoY.toFixed(1)}%`);
   if (!Number.isNaN(spread) && spread < -0.2) score -= 0.12;
 
   const dxy = findForexPair(forex, 'dxy');
@@ -296,14 +378,15 @@ function assessFinancialEnvironment(fed, boj, forex, indices) {
   score += riskAppetite.modifier;
 
   score = clamp(score, -1, 1);
-  let regime = 'neutral';
-  if (score >= 0.22) regime = 'loose';
-  else if (score <= -0.22) regime = 'tight';
+  const prevRegime = options.prevRegime || 'neutral';
+  const regime = applyFinanceRegimeHysteresis(score, prevRegime);
 
   return {
     regime,
     regimeLabel: FINANCE_LABELS[regime],
     score: +score.toFixed(4),
+    dffTrend,
+    m2YoYProxy: m2YoY,
     riskAppetite,
     summary:
       regime === 'loose'
@@ -548,7 +631,7 @@ function computeOilMotherEffect(crudeChange, sector, instrumentId = null) {
   };
 }
 
-function computeCapitalSentiment(technical, liveQuote, sectorVolumeRank = null) {
+function computeCapitalSentiment(technical, liveQuote, sectorVolumeRank = null, vix = null, sector = null) {
   const vol5 = technical?.volume?.ratio ?? 1;
   const oiDelta = technical?.oi?.deltaPct;
   const priceChg = technical?.intraday?.changePct ?? liveQuote?.changePct ?? 0;
@@ -561,10 +644,24 @@ function computeCapitalSentiment(technical, liveQuote, sectorVolumeRank = null) 
   if (priceChg > 0 && oiDelta > 0) score += 0.08;
   else if (priceChg < 0 && oiDelta > 0) score -= 0.1;
 
+  const vixSafe = vix != null && !Number.isNaN(Number(vix)) ? Number(vix) : null;
+  if (vixSafe != null) {
+    const sectorVixSens =
+      sector === 'precious' || sector === 'energy' ? 1.15 : sector === 'agriculture' ? 0.85 : 1;
+    if (vixSafe > 28) score -= 0.12 * sectorVixSens;
+    else if (vixSafe < 16) score += 0.06 * sectorVixSens;
+  }
+
   const normalized = clamp(score, -1, 1);
+  const weight =
+    Math.abs(normalized) > 0.25
+      ? WEIGHT_CAPITAL_SENTIMENT.max
+      : Math.abs(normalized) > 0.1
+        ? WEIGHT_CAPITAL_SENTIMENT.default
+        : WEIGHT_CAPITAL_SENTIMENT.min;
   return {
     score: +normalized.toFixed(4),
-    weight: WEIGHT_CAPITAL_SENTIMENT.default,
+    weight,
     summary:
       normalized > 0.15 ? '资金净流入/增仓' : normalized < -0.15 ? '资金流出/减仓' : '资金情绪中性',
   };
@@ -704,7 +801,9 @@ function rankFactors(instrument, factorBag) {
   const secondary = candidates.filter((c) => c.tier === 'secondary').sort((a, b) => Math.abs(b.score) - Math.abs(a.score));
 
   const hasPrimary = primary.length > 0;
+  const primaryMaxAbs = primary.reduce((m, f) => Math.max(m, Math.abs(f.score ?? 0)), 0);
   let secondaryCap = hasPrimary ? SECONDARY_FACTOR_CAP : 0.35;
+  if (primaryMaxAbs > PRIMARY_STRONG_THRESHOLD) secondaryCap = PRIMARY_STRONG_SECONDARY_CAP;
   let secondaryUsed = 0;
   const secondaryCapped = secondary.map((s) => {
     const raw = s.score * s.weight;
@@ -722,7 +821,20 @@ function rankFactors(instrument, factorBag) {
       ? `次矛盾：${(secondaryCapped.find((s) => s.capped) || secondaryCapped[0]).label}${secondaryCapped.some((s) => s.capped) ? '（权重降）' : ''}`
       : null;
 
-  return { primary, secondary: secondaryCapped, primaryChip, secondaryChip, secondaryCap };
+  const secondaryDominates =
+    hasPrimary &&
+    secondaryCapped.reduce((s, f) => s + Math.abs(f.effective ?? 0), 0) >
+      primary.reduce((s, f) => s + Math.abs(f.score * f.weight), 0) * 0.85;
+
+  return {
+    primary,
+    secondary: secondaryCapped,
+    primaryChip,
+    secondaryChip,
+    secondaryCap,
+    primaryMaxAbs: +primaryMaxAbs.toFixed(4),
+    secondaryDominates,
+  };
 }
 
 function buildPhilosophyComposite(ranked, factorBag) {
@@ -779,7 +891,20 @@ function evaluateInstrumentPhilosophy(ctx) {
     macroChina
   );
 
-  const finance = assessFinancialEnvironment(sources.fed, sources.boj, sources.forex, sources.indices);
+  let financePrev = 'neutral';
+  try {
+    financePrev = require('./commodity-outlook-calibration').getFinanceRegimeState().regime;
+  } catch {
+    financePrev = 'neutral';
+  }
+  const finance = assessFinancialEnvironment(sources.fed, sources.boj, sources.forex, sources.indices, {
+    prevRegime: financePrev,
+  });
+  try {
+    require('./commodity-outlook-calibration').persistFinanceRegime(finance.regime);
+  } catch {
+    // ignore persistence errors
+  }
   const sdFinance = combineSdFinance(sd, finance);
 
   const policy = assessPolicyForInstrument(meta.id, sources.policy?.items, macroChina.score);
@@ -789,7 +914,16 @@ function evaluateInstrumentPhilosophy(ctx) {
   const crudeChange = getCrudeChangePct(sources.commodities);
   const oil = computeOilMotherEffect(crudeChange, spec.sector, meta.id);
 
-  const capitalSentiment = computeCapitalSentiment(technical, liveQuote, sectorVolumeRank);
+  const vixForCapital = parseFloat(
+    (sources.fed?.indicators || []).find((i) => i.id === 'VIXCLS')?.value
+  );
+  const capitalSentiment = computeCapitalSentiment(
+    technical,
+    liveQuote,
+    sectorVolumeRank,
+    Number.isNaN(vixForCapital) ? null : vixForCapital,
+    spec.sector
+  );
   const priceFeedback = computePriceFeedback(changePct ?? liveQuote?.changePct, sdFinance);
 
   const bojScore = (() => {
@@ -840,6 +974,7 @@ function evaluateInstrumentPhilosophy(ctx) {
     ranked,
     compositeScore: composite.score,
     contributions: composite.contributions,
+    secondaryDominates: ranked.secondaryDominates,
     paradigmHint,
     logicSummary: [
       `供需：${sd.summary}`,
@@ -861,6 +996,9 @@ module.exports = {
   SECONDARY_FACTOR_CAP,
   assessSupplyDemand,
   assessFinancialEnvironment,
+  applyFinanceRegimeHysteresis,
+  computeDffTrend,
+  computeM2YoYProxy,
   combineSdFinance,
   policyPrimaryContradiction,
   climateDurationFactor,

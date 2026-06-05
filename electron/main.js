@@ -765,6 +765,36 @@ ipcMain.handle('bootstrap-outlook-daily', async () => {
   }
 });
 
+ipcMain.handle('run-outlook-backtest', async (event, options = {}) => {
+  try {
+    const { runOutlookBacktest } = require('../services/commodity-outlook-backtest');
+    const win = BrowserWindow.fromWebContents(event.sender);
+    const summary = await runOutlookBacktest({
+      days: options.days ?? 60,
+      onProgress: (progress) => {
+        if (win && !win.isDestroyed()) {
+          win.webContents.send('outlook-backtest-progress', progress);
+        }
+      },
+    });
+    return summary;
+  } catch (err) {
+    return { error: localizeErrorMessage(err.message || '回测运行失败') };
+  }
+});
+
+ipcMain.handle('get-outlook-backtest-summary', async () => {
+  try {
+    const { loadBacktestSummary, getBacktestProgress } = require('../services/commodity-outlook-backtest');
+    return {
+      summary: loadBacktestSummary(),
+      progress: getBacktestProgress(),
+    };
+  } catch (err) {
+    return { error: localizeErrorMessage(err.message || '回测摘要读取失败') };
+  }
+});
+
 ipcMain.handle('open-external', async (_event, url) => {
   if (url && typeof url === 'string') {
     await shell.openExternal(url);

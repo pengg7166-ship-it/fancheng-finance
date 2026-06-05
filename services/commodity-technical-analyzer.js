@@ -604,13 +604,12 @@ function computeVolatilityProxy({ historicalVol, intraday, liveQuote }) {
   return Math.max(0.12, 0.15 + chg * 0.25);
 }
 
-function analyzeInstrumentTechnicals(commodityId, liveQuote = null, options = {}) {
+function analyzeInstrumentTechnicalsFromBars(commodityId, bars = [], liveQuote = null, options = {}) {
   const meta = getCommodityMeta(commodityId);
   if (!meta) return null;
 
-  const cachedBars = readCachedKlines(commodityId);
-  const bars = mergeLiveBar(cachedBars, liveQuote);
-  const closes = bars.map((b) => b.close).filter((c) => !Number.isNaN(c));
+  const merged = mergeLiveBar(bars, liveQuote);
+  const closes = merged.map((b) => b.close).filter((c) => !Number.isNaN(c));
   const dataPoints = closes.length;
   const hasEnough = dataPoints >= 20;
   const hasLivePrice = liveQuote?.price != null && !Number.isNaN(Number(liveQuote.price));
@@ -622,25 +621,27 @@ function analyzeInstrumentTechnicals(commodityId, liveQuote = null, options = {}
   if (dataPoints >= 5) {
     boll = computeBollinger(closes, 20, 2);
     maStack = computeMaStack(closes);
-    volume = computeVolumeRatio(bars);
+    volume = computeVolumeRatio(merged);
   }
 
   const intraday = computeIntradayMetrics(liveQuote);
-  const oi = updateOiSnapshot(commodityId, liveQuote?.openInterest);
-  const historicalVol = computeHistoricalVolMetrics(bars);
-  const realizedVolPct = computeRealizedVolPct(bars);
-  const smoothedVol = computeSmoothedVolMetrics(bars, {
+  const oi = liveQuote?.openInterest
+    ? {
+        current: liveQuote.openInterest,
+        deltaPct: null,
+        score: 0,
+        label: '历史持仓',
+      }
+    : { current: null, deltaPct: null, score: 0, label: '持仓待更新' };
+  const historicalVol = computeHistoricalVolMetrics(merged);
+  const realizedVolPct = computeRealizedVolPct(merged);
+  const smoothedVol = computeSmoothedVolMetrics(merged, {
     intraday,
     sectorPrior: options.sectorPrior,
     commodityId: meta.id,
   });
   const volatilityProxy = smoothedVol?.volForecastPct ?? computeVolatilityProxy({ historicalVol, liveQuote, intraday });
   const techScore = technicalScoreFromIndicators({ boll, maStack, volume, oi, intraday });
-
-  let sourceNote = null;
-  if (!hasEnough) {
-    sourceNote = hasLivePrice ? '日线不足·用盘中+资讯' : '指标待日线积累';
-  }
 
   return {
     commodityId: meta.id,
@@ -662,8 +663,13 @@ function analyzeInstrumentTechnicals(commodityId, liveQuote = null, options = {}
     smoothedVol,
     volatilityProxy,
     techScore,
-    sourceNote,
+    sourceNote: hasEnough ? '回测K线' : '日线不足',
   };
+}
+
+function analyzeInstrumentTechnicals(commodityId, liveQuote = null, options = {}) {
+  const cachedBars = readCachedKlines(commodityId);
+  return analyzeInstrumentTechnicalsFromBars(commodityId, cachedBars, liveQuote, options);
 }
 
 module.exports = {
@@ -686,5 +692,6 @@ module.exports = {
   mergeLiveBar,
   updateOiSnapshot,
   analyzeInstrumentTechnicals,
+  analyzeInstrumentTechnicalsFromBars,
   technicalScoreFromIndicators,
 };

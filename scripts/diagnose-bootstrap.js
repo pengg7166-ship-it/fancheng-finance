@@ -193,7 +193,7 @@ app.whenReady().then(async () => {
     cuInst?.scenarios?.bull?.mid != null &&
     Math.abs(Number(cuInst.scenarios.bull.mid) - Number(cuInst.scenarios.base.mid)) >= 0.02;
   const latencyUiOk = Boolean(auInst?.latencyState && auInst?.latencyLabel);
-  const versionOk = APP_VERSION === '1.24.0';
+  const versionOk = APP_VERSION === '1.25.0';
   const scInst = (engineProbe.instruments || []).find((i) => String(i.id).toLowerCase() === 'sc');
   const fgInst = (engineProbe.instruments || []).find((i) => String(i.id).toLowerCase() === 'fg');
   const niInst = (engineProbe.instruments || []).find((i) => String(i.id).toLowerCase() === 'ni');
@@ -208,6 +208,16 @@ app.whenReady().then(async () => {
     philosophyFieldOk(fgInst) &&
     philosophyFieldOk(niInst);
   const philosophyMatrixOk = Boolean(engineProbe.framework?.philosophyMatrix?.demandStrong?.loose?.paradigm0820);
+  let backtestModuleOk = false;
+  let backtestHitFieldOk = false;
+  try {
+    const backtest = require('../services/commodity-outlook-backtest');
+    backtestModuleOk = typeof backtest.runOutlookBacktest === 'function' && typeof backtest.loadBacktestSummary === 'function';
+    const calPath = require('../services/commodity-outlook-calibration').getCalibrationPath();
+    backtestHitFieldOk = Boolean(engineProbe.stats?.backtestHitRate30d != null || engineProbe.stats?.calibrationPath || calPath);
+  } catch (err) {
+    console.log(`[diagnose] backtest module check failed: ${err.message}`);
+  }
   const {
     countTodayArchiveEntries,
     getOutlookHistoryRoot,
@@ -248,6 +258,8 @@ app.whenReady().then(async () => {
     dailyFolderOk,
     philosophyOk,
     philosophyMatrixOk,
+    backtestModuleOk,
+    backtestHitFieldOk,
   };
   const enginePass = Object.values(engineChecks).every(Boolean);
   if (!enginePass) {
@@ -406,7 +418,7 @@ app.whenReady().then(async () => {
     latencyChip: ui.latencyChipVisible,
     toolbar: ui.toolbarStampVisible,
     rowHeight: ui.rowMinHeightPx >= 72,
-    versionUi: result?.version === 'v1.23.0',
+    versionUi: result?.version === 'v1.25.0',
     volLineUi: ui.volLineVisible && ui.volLegible,
     techTagsUi: ui.techTagsNoOverlap,
     historicalUi: ui.historicalOk,
@@ -431,7 +443,9 @@ app.whenReady().then(async () => {
     { id: 'C1', name: '现价涨跌框', pass: uiChecks.priceBox && uiChecks.chgBox },
     { id: 'D1', name: '详情面板排版', pass: uiChecks.detailBelow && uiChecks.predLegible && uiChecks.rowHeight },
     { id: 'D2', name: '工具栏板块时间戳', pass: uiChecks.sectorTabs && uiChecks.toolbar },
-    { id: 'E1', name: '版本1.23.0', pass: engineChecks.versionOk && uiChecks.versionUi },
+    { id: 'E1', name: '版本1.25.0', pass: engineChecks.versionOk && uiChecks.versionUi },
+    { id: 'E7', name: '回测模块加载', pass: engineChecks.backtestModuleOk },
+    { id: 'E8', name: '回测命中率字段', pass: engineChecks.backtestHitFieldOk || engineChecks.backtestModuleOk },
     { id: 'E2', name: '存档目录', pass: Boolean(archiveRoot) },
     { id: 'E3', name: '每日快照目录', pass: engineChecks.dailyFolderOk },
     { id: 'E4', name: '历史对照文案', pass: engineChecks.historicalOk && uiChecks.historicalUi },
