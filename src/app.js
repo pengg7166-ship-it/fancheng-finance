@@ -2856,6 +2856,7 @@ async function runOutlookLongrunBacktestUi(panel) {
       if (window.__outlookCacheStats) {
         window.__outlookCacheStats.longRunHitRate = summary.overallHitRate;
         window.__outlookCacheStats.longRunByEra = summary.byEra;
+        window.__outlookCacheStats.longRunBySector = summary.bySector;
       }
       showOutlookLongrunResultsModal(summary);
       if (outlookSelectedInstrumentId) updateOutlookDetailPanel(panel, outlookSelectedInstrumentId);
@@ -3159,26 +3160,92 @@ function renderOutlookMacroStrip(factors) {
   return `<div class="outlook-macro-strip-wrap"><div class="outlook-macro-strip" role="list">${chips}</div></div>`;
 }
 
+function renderOutlookSectorHitBadges(stats) {
+  const bySector = stats?.longRunBySector;
+  if (!bySector) return '';
+  const target = stats?.hitRateTarget ?? 0.7;
+  return Object.entries(bySector)
+    .map(([id, s]) => {
+      const pct = s.hitRate != null ? Math.round(s.hitRate * 100) : null;
+      const gap = s.hitRate != null ? Math.round((target - s.hitRate) * 100) : null;
+      const cls = pct == null ? 'empty' : pct >= 70 ? 'hit-target' : pct >= 55 ? 'hit-mid' : 'hit-low';
+      const title =
+        pct != null
+          ? `${s.label || id} 长周期 ${pct}% · 目标70% · 差距${gap >= 0 ? '+' : ''}${gap}pp`
+          : `${s.label || id} 暂无回测`;
+      return `<span class="outlook-sector-hit ${cls}" data-sector="${escapeAttr(id)}" title="${escapeAttr(title)}">${escapeHtml(s.label || id)} ${pct != null ? pct + '%' : '—'}</span>`;
+    })
+    .join('');
+}
+
 function renderOutlookHitRateBadge(stats) {
+  const target = stats?.hitRateTarget ?? 0.7;
   const longRun = stats?.longRunHitRate;
+  const gapOverall = longRun != null ? Math.round((target - longRun) * 100) : null;
   const longRunBadge =
     longRun != null
-      ? `<span class="outlook-hit-rate outlook-hit-rate-longrun" title="2019→今 walk-forward 长周期方向命中率">长周期命中 2019-now ${Math.round(longRun * 100)}%</span>`
+      ? `<span class="outlook-hit-rate outlook-hit-rate-longrun${longRun >= target ? ' hit-target' : ''}" title="2019→今 walk-forward · 目标70% · 差距${gapOverall >= 0 ? '+' : ''}${gapOverall}pp">长周期 ${Math.round(longRun * 100)}% / 目标70%</span>`
       : '';
+  const sectorBadges = renderOutlookSectorHitBadges(stats);
   const bt30 = stats?.backtestHitRate30d;
   const bt60 = stats?.backtestHitRate60d;
   if (bt30 != null || bt60 != null) {
     const p30 = bt30 != null ? Math.round(bt30 * 100) : '—';
     const p60 = bt60 != null ? Math.round(bt60 * 100) : '—';
-    return `${longRunBadge}<span class="outlook-hit-rate outlook-hit-rate-backtest" title="walk-forward回测方向命中率">回测命中率 30d ${p30}% · 60d ${p60}%</span>`;
+    return `${longRunBadge}${sectorBadges}<span class="outlook-hit-rate outlook-hit-rate-backtest" title="walk-forward回测方向命中率">回测 30d ${p30}% · 60d ${p60}%</span>`;
   }
-  if (longRunBadge) return longRunBadge;
+  if (longRunBadge || sectorBadges) return `${longRunBadge}${sectorBadges}`;
   const hit = stats?.directionHitRate7d;
   if (!hit || hit.total < 1) {
-    return '<span class="outlook-hit-rate outlook-hit-rate-empty" title="运行回测或近7日校验后显示">回测命中率 —</span>';
+    return '<span class="outlook-hit-rate outlook-hit-rate-empty" title="运行回测或近7日校验后显示">回测命中率 — · 目标70%</span>';
   }
   const pct = Math.round((hit.rate ?? 0) * 100);
-  return `<span class="outlook-hit-rate" title="近7日方向命中 ${hit.hits}/${hit.total}">近7日命中率 ${pct}%</span>`;
+  return `<span class="outlook-hit-rate" title="近7日方向命中 ${hit.hits}/${hit.total}">近7日 ${pct}%</span>`;
+}
+
+function renderOutlookCalibrationModalBody(calibration) {
+  const sw = calibration?.sectorWeights || {};
+  const target = calibration?.hitRateTarget ?? 0.7;
+  const rows = Object.entries(sw)
+    .map(([sector, w]) => {
+      const hit = w.hitRate != null ? `${Math.round(w.hitRate * 100)}%` : '—';
+      const gap = w.hitRate != null ? `${Math.round((target - w.hitRate) * 100)}pp` : '—';
+      return `<tr>
+        <td>${escapeHtml(sector)}</td>
+        <td>${(w.philosophyWeight * 100).toFixed(0)}%</td>
+        <td>${(w.adaptiveWeight * 100).toFixed(0)}%</td>
+        <td>${(w.factorWeight * 100).toFixed(0)}%</td>
+        <td>${w.directionBull ?? '—'}</td>
+        <td>${hit}</td>
+        <td>${gap}</td>
+      </tr>`;
+    })
+    .join('');
+  return `<p class="outlook-calibration-intro">板块分权 v1.27 · 网格搜索长周期2019回测 · 目标命中率 <strong>70%</strong></p>
+    <table class="outlook-calibration-table">
+      <thead><tr><th>板块</th><th>哲学</th><th>自适应</th><th>因子</th><th>方向阈</th><th>回测命中</th><th>距70%</th></tr></thead>
+      <tbody>${rows || '<tr><td colspan="7">运行长周期回测后生成</td></tr>'}</tbody>
+    </table>`;
+}
+
+function openOutlookCalibrationModal(panel, stats) {
+  if (!panel) return;
+  let modal = panel.querySelector('.outlook-calibration-modal');
+  if (!modal) {
+    modal = document.createElement('div');
+    modal.className = 'outlook-calibration-modal outlook-backtest-modal outlook-history-modal';
+    modal.innerHTML =
+      '<div class="outlook-history-dialog outlook-backtest-dialog"><header><h4>板块权重校准 v1.27</h4><button type="button" class="outlook-history-close" data-action="close-outlook-calibration">×</button></header><div class="outlook-calibration-body"></div></div>';
+    panel.appendChild(modal);
+  }
+  const body = modal.querySelector('.outlook-calibration-body');
+  if (body) {
+    body.innerHTML = renderOutlookCalibrationModalBody({
+      sectorWeights: stats?.sectorWeights,
+      hitRateTarget: stats?.hitRateTarget,
+    });
+  }
+  modal.removeAttribute('hidden');
 }
 
 function renderOutlookBacktestProgress(progress) {
@@ -3251,6 +3318,7 @@ function renderOutlookToolbar(source, sectors, sectorCounts, activeSector) {
       <button type="button" class="btn-link outlook-toolbar-longrun" data-action="run-outlook-longrun-backtest"${outlookLongrunRunning || outlookBacktestRunning ? ' disabled' : ''} title="2019→今 walk-forward，首次约需数分钟">长周期 2019至今</button>
       <button type="button" class="btn-link outlook-toolbar-archive" data-action="open-outlook-history-global">研判存档</button>
       <button type="button" class="btn-link outlook-toolbar-daily-compare" data-action="open-outlook-daily-compare">每日对照</button>
+      <button type="button" class="btn-link outlook-toolbar-calibration" data-action="open-outlook-calibration" title="板块权重与命中率">板块校准</button>
       ${renderOutlookHitRateBadge(source.stats)}
       <span class="outlook-backtest-progress-slot">${renderOutlookBacktestProgress(window.__outlookBacktestProgress)}</span>
     </div>
@@ -4375,6 +4443,18 @@ function setupOutlookPanel() {
       if (closeDailyCompare) {
         e.preventDefault();
         panel.querySelector('.outlook-daily-compare-modal')?.setAttribute('hidden', '');
+        return;
+      }
+      const openCalibration = e.target.closest('[data-action="open-outlook-calibration"]');
+      if (openCalibration) {
+        e.preventDefault();
+        openOutlookCalibrationModal(panel, window.__outlookCacheStats);
+        return;
+      }
+      const closeCalibration = e.target.closest('[data-action="close-outlook-calibration"]');
+      if (closeCalibration) {
+        e.preventDefault();
+        panel.querySelector('.outlook-calibration-modal')?.setAttribute('hidden', '');
         return;
       }
       const closeDetail = e.target.closest('[data-action="close-outlook-detail"]');

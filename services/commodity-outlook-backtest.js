@@ -19,7 +19,7 @@ const eventCalendar = require('./commodity-outlook-event-calendar');
 const MIN_BARS = 60;
 const MIN_WALK_START = 25;
 const LONG_RUN_START = historicalContext.LONG_RUN_START;
-const LONG_RUN_VERSION = 'v1.26.0';
+const LONG_RUN_VERSION = 'v1.27.0';
 
 let backtestRunning = false;
 let backtestProgress = { phase: 'idle', pct: 0, message: '' };
@@ -113,7 +113,8 @@ function predictAtBarIndexHistorical(spec, bars, tIndex, weights, prevFinanceReg
     instrumentId: spec.id,
     sector: spec.sector,
   });
-  const blend = calibration.getCompositeWeights(barDate, eventCtx);
+  const eventCtxMerged = calibration.mergeSectorIntoEventMultipliers(eventCtx, spec.sector);
+  const blend = calibration.getCompositeWeights(barDate, eventCtxMerged, spec.sector);
 
   const meta = getCommodityMeta(spec.id);
   const profile = getInstrumentProfile(spec.id);
@@ -146,7 +147,7 @@ function predictAtBarIndexHistorical(spec, bars, tIndex, weights, prevFinanceReg
   });
 
   let macroScores = buildMacroScoresForInstrument(sources, spec.bucket);
-  macroScores = applyMacroEventMultipliers(macroScores, eventCtx.weightMultipliers);
+  macroScores = applyMacroEventMultipliers(macroScores, eventCtxMerged.weightMultipliers);
   const vix = parseVix(sources.fed);
   const histRegime = historicalContext.getHistoricalRegime(barDate);
   const adaptive = marketAdaptive.computeAdaptiveOutlook({
@@ -176,21 +177,46 @@ function predictAtBarIndexHistorical(spec, bars, tIndex, weights, prevFinanceReg
     regime: histRegime,
   });
   let factorComposite = clamp((factorBreakdown._sum ?? 0), -1, 1);
-  const capMult = eventCtx.weightMultipliers?.capitalSentiment ?? 1;
+  const capMult = eventCtxMerged.weightMultipliers?.capitalSentiment ?? 1;
   if (capMult !== 1) {
     factorComposite = clamp(factorComposite * capMult, -1, 1);
   }
 
   let philosophyScore = phil.compositeScore ?? 0;
-  const philMult = eventCtx.weightMultipliers?.philosophy ?? 1;
+  const philMult = eventCtxMerged.weightMultipliers?.philosophy ?? 1;
   if (philMult !== 1) philosophyScore = clamp(philosophyScore * philMult, -1, 1);
 
-  const pw = blend.philosophyWeight ?? weights.philosophyWeight ?? 0.58;
-  const aw = blend.adaptiveWeight ?? weights.adaptiveWeight ?? 0.22;
-  const fw = blend.factorWeight ?? weights.factorWeight ?? 0.2;
-  let compositeScore = clamp(philosophyScore * pw + adaptive.compositeScore * aw + factorComposite * fw, -1, 1);
+  let compositeScore = calibration.blendSectorComposite({
+    philosophyScore,
+    adaptiveScore: adaptive.compositeScore,
+    factorComposite,
+    sector: spec.sector,
+    date: barDate,
+    eventCtx: eventCtxMerged,
+  });
 
-  let direction = scoreToDirection(compositeScore);
+  let dirTier = calibration.scoreToDirectionTier(compositeScore, spec.sector, profile.directionThresholds, technical.smoothedVol);
+  const adv = calibration.applyAdvancedDirectionFilters({
+    sector: spec.sector,
+    compositeScore,
+    directionTier: dirTier,
+    technical,
+    eventCtx: eventCtxMerged,
+    phil,
+    smoothedVol: technical.smoothedVol,
+    barDate,
+    eraId: historicalContext.classifyEra(barDate),
+  });
+  dirTier = adv.directionTier;
+  compositeScore = adv.compositeScore;
+  dirTier = calibration.applyEnsembleStrongDirectionRule(dirTier, spec.sector, compositeScore);
+
+  let direction = dirTier.direction === 'strong_bullish' || dirTier.direction === 'bullish'
+    ? 'bullish'
+    : dirTier.direction === 'strong_bearish' || dirTier.direction === 'bearish'
+      ? 'bearish'
+      : 'neutral';
+
   if (dataQuality < 3) {
     direction = 'neutral';
     compositeScore = clamp(compositeScore * 0.35, -0.35, 0.35);
@@ -481,7 +507,7 @@ function runLongrunBacktest2019({ force = false, onProgress = null, writeAllInst
           vix: 'fred-vixcls-daily.json or piecewise',
           macroEvents: 'commodity-outlook-event-calendar HISTORICAL_EVENTS',
         },
-        activeEventModel: 'event-weighted-regime-v1.26',
+        activeEventModel: 'sector-weighted-regime-v1.27',
         byEra,
         bySector,
         byMatrix,

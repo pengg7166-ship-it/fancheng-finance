@@ -1416,6 +1416,58 @@
   background: rgba(245, 158, 11, 0.12);
 }
 
+.outlook-hit-rate.hit-target {
+  color: #86efac;
+  border-color: rgba(134, 239, 172, 0.45);
+  background: rgba(34, 197, 94, 0.15);
+}
+
+.outlook-sector-hit {
+  font-size: 0.68rem;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: 3px;
+  margin-right: 3px;
+  border: 1px solid rgba(148, 163, 184, 0.3);
+  color: #cbd5e1;
+  white-space: nowrap;
+}
+
+.outlook-sector-hit.hit-target {
+  color: #86efac;
+  border-color: rgba(134, 239, 172, 0.4);
+}
+
+.outlook-sector-hit.hit-mid {
+  color: #fcd34d;
+  border-color: rgba(252, 211, 77, 0.35);
+}
+
+.outlook-sector-hit.hit-low {
+  color: #fca5a5;
+  border-color: rgba(252, 165, 165, 0.35);
+}
+
+.outlook-calibration-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.78rem;
+  margin-top: 8px;
+}
+
+.outlook-calibration-table th,
+.outlook-calibration-table td {
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  padding: 4px 6px;
+  text-align: center;
+}
+
+.outlook-calibration-intro {
+  font-size: 0.82rem;
+  color: #94a3b8;
+  margin: 0 0 8px;
+}
+
 .outlook-backtest-progress {
   display: inline-flex;
   align-items: center;

@@ -4,7 +4,7 @@
  */
 const { normalizeCommodityId } = require('./policy-commodity-map');
 
-const PHILOSOPHY_VERSION = 'v1.26.0';
+const PHILOSOPHY_VERSION = 'v1.27.0';
 
 const SUPPLY_SIDE_KEYWORDS = [
   '增产', '扩产', '库存高企', '供应过剩', '累库', '进口大增', '投放', '复产', '产能释放',

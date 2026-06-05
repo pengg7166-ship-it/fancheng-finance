@@ -28,7 +28,7 @@ const OUTLOOK_DISK_KEY = 'commodity-outlook-v4.json';
 const OUTLOOK_DISK_TTL_MS = 60 * 1000;
 const OUTLOOK_RECOMPUTE_DEBOUNCE_MS = 800;
 const PRICE_OI_CHANGE_THRESHOLD_PCT = 0.15;
-const OUTLOOK_ENGINE_VERSION = 'v1.26.0';
+const OUTLOOK_ENGINE_VERSION = 'v1.27.0';
 
 /** 市场研判环境（条件权重，非固定） */
 const REGIME_IDS = ['riskOn', 'riskOff', 'liquidityPanic', 'supplyShock', 'weatherShock', 'neutral'];
@@ -1862,6 +1862,7 @@ function buildInstrumentOutlooks(sources, globalCtx = null) {
         instrumentId: spec.id,
         sector: spec.sector,
       });
+      const eventCtxMerged = outlookCalibration.mergeSectorIntoEventMultipliers(eventCtx, spec.sector);
 
       const phil = philosophy.evaluateInstrumentPhilosophy({
         meta,
@@ -1873,7 +1874,7 @@ function buildInstrumentOutlooks(sources, globalCtx = null) {
         newsImpact,
         sectorVolumeRank: sectorRanks[spec.id],
         changePct: mergedQuote.changePct,
-        eventMultipliers: eventCtx.weightMultipliers,
+        eventMultipliers: eventCtxMerged.weightMultipliers,
       });
 
       const ctx = evaluateContext(sources, {
@@ -1886,7 +1887,7 @@ function buildInstrumentOutlooks(sources, globalCtx = null) {
       const regimeLabel = REGIME_LABELS[regime] || regime;
 
       let macroScores = buildMacroScoresForInstrument(sources, spec.bucket);
-      macroScores = applyLiveMacroEventMultipliers(macroScores, eventCtx.weightMultipliers);
+      macroScores = applyLiveMacroEventMultipliers(macroScores, eventCtxMerged.weightMultipliers);
       const capitalAttention = computeCapitalAttention(technical, liveQuote, sectorRanks[spec.id]);
       const inventoryScore = computeInventoryScore(technical, profile);
       const weatherScore = computeWeatherScore(macroScores.climate, profile);
@@ -1917,7 +1918,7 @@ function buildInstrumentOutlooks(sources, globalCtx = null) {
       delete factorBreakdown._regimeMultipliers;
 
       let factorComposite = clamp((factorBreakdown._sum ?? 0) + (volBiasParts.volBias || 0), -1, 1);
-      const capMult = eventCtx.weightMultipliers?.capitalSentiment ?? 1;
+      const capMult = eventCtxMerged.weightMultipliers?.capitalSentiment ?? 1;
       if (capMult !== 1) factorComposite = clamp(factorComposite * capMult, -1, 1);
       delete factorBreakdown._sum;
       if (volBiasParts.volForecastPct != null) {
@@ -1950,19 +1951,25 @@ function buildInstrumentOutlooks(sources, globalCtx = null) {
         (macroScores.boj ?? 0) * (profile.macroSensitivity?.fed ?? 0.5) * (profile.factorWeights?.macroFed ?? 0.08);
 
       let philosophyScore = phil.compositeScore ?? 0;
-      const philMult = eventCtx.weightMultipliers?.philosophy ?? 1;
+      const philMult = eventCtxMerged.weightMultipliers?.philosophy ?? 1;
       if (philMult !== 1) philosophyScore = clamp(philosophyScore * philMult, -1, 1);
-      const blend = outlookCalibration.getCompositeWeights(today, eventCtx);
-      const compositeScoreRaw = clamp(
-        philosophyScore * blend.philosophyWeight +
-          adaptive.compositeScore * blend.adaptiveWeight +
-          factorComposite * blend.factorWeight,
-        -1,
-        1
-      );
+      const blend = outlookCalibration.getCompositeWeights(today, eventCtxMerged, spec.sector);
+      const compositeScoreRaw = outlookCalibration.blendSectorComposite({
+        philosophyScore,
+        adaptiveScore: adaptive.compositeScore,
+        factorComposite,
+        sector: spec.sector,
+        date: today,
+        eventCtx: eventCtxMerged,
+      });
 
       let compositeScore = compositeScoreRaw;
-      let dirTier = scoreToDirectionTierWithVol(compositeScore, profile, technical.smoothedVol);
+      let dirTier = outlookCalibration.scoreToDirectionTier(
+        compositeScore,
+        spec.sector,
+        profile.directionThresholds,
+        technical.smoothedVol
+      );
       let direction = directionTierClass(dirTier.direction);
       let directionLabelOverride = null;
       let insufficientData = false;
@@ -1972,7 +1979,29 @@ function buildInstrumentOutlooks(sources, globalCtx = null) {
         direction = 'neutral';
         directionLabelOverride = '数据不足·观望';
         compositeScore = clamp(compositeScoreRaw * 0.35, -0.35, 0.35);
-        dirTier = scoreToDirectionTierWithVol(compositeScore, profile, technical.smoothedVol);
+        dirTier = outlookCalibration.scoreToDirectionTier(
+          compositeScore,
+          spec.sector,
+          profile.directionThresholds,
+          technical.smoothedVol
+        );
+      } else {
+        const adv = outlookCalibration.applyAdvancedDirectionFilters({
+          sector: spec.sector,
+          compositeScore,
+          directionTier: dirTier,
+          technical,
+          eventCtx: eventCtxMerged,
+          phil,
+          smoothedVol: technical.smoothedVol,
+          barDate: today,
+          eraId: eventCalendar.classifyEpoch(today),
+        });
+        dirTier = adv.directionTier;
+        compositeScore = adv.compositeScore;
+        directionLabelOverride = adv.directionLabelOverride;
+        dirTier = outlookCalibration.applyEnsembleStrongDirectionRule(dirTier, spec.sector, compositeScore);
+        direction = directionTierClass(dirTier.direction);
       }
 
       const hasLivePrice = mergedQuote.price != null && !Number.isNaN(Number(mergedQuote.price));
@@ -2314,7 +2343,7 @@ function buildCommodityOutlookFromSources(sources = {}) {
     framework: {
       logicModel:
         '核心：供需×金融环境矩阵 → 主/次矛盾分级 → 现价反馈+资金情绪 → 技术/双速通道校验 → 四情景区间',
-      philosophyModel: 'Price = Supply/Demand × Financial Environment（v1.26 事件加权+长周期校准）',
+      philosophyModel: 'Price = Supply/Demand × Financial Environment（v1.27 板块分权+高级过滤）',
       philosophyMatrix: philosophy.SD_FINANCE_MATRIX,
       horizons: HORIZON_LABELS,
       factorIds: FACTOR_DEFS.map((f) => f.id),
@@ -2339,6 +2368,9 @@ function buildCommodityOutlookFromSources(sources = {}) {
       backtestHitRate30d: backtestSummary?.overallHitRate30d ?? null,
       backtestHitRate60d: backtestSummary?.overallHitRate60d ?? null,
       longRunHitRate: longrunSummary?.overallHitRate ?? outlookCalibration.getLongRunHitRate?.() ?? null,
+      longRunBySector: longrunSummary?.bySector ?? outlookCalibration.getAllSectorHitRatesLongrun?.() ?? null,
+      hitRateTarget: outlookCalibration.HIT_RATE_TARGET ?? 0.7,
+      sectorWeights: outlookCalibration.loadCalibration?.()?.sectorWeights ?? null,
       longRunPeriodFrom: longrunSummary?.periodFrom ?? '2019-01-01',
       longRunPeriodTo: longrunSummary?.periodTo ?? null,
       longRunByEra: longrunSummary?.byEra ?? null,
@@ -2398,6 +2430,9 @@ async function fetchCommodityOutlookSource(sources) {
   payload.stats.backtestHitRate30d = bt?.overallHitRate30d ?? null;
   payload.stats.backtestHitRate60d = bt?.overallHitRate60d ?? null;
   payload.stats.longRunHitRate = lr?.overallHitRate ?? outlookCalibration.getLongRunHitRate?.() ?? null;
+  payload.stats.longRunBySector = lr?.bySector ?? outlookCalibration.getAllSectorHitRatesLongrun?.() ?? null;
+  payload.stats.hitRateTarget = outlookCalibration.HIT_RATE_TARGET ?? 0.7;
+  payload.stats.sectorWeights = outlookCalibration.loadCalibration?.()?.sectorWeights ?? null;
   payload.stats.longRunByEra = lr?.byEra ?? null;
   payload.stats.calibrationPath = outlookCalibration.getCalibrationPath();
   payload.stats.dailySnapshotPath = outlookHistory.getDailySummaryPath();
