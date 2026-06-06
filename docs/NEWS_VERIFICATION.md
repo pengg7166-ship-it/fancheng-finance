@@ -1,86 +1,60 @@
-# 新闻标注历史校验报告
+# 新闻标注历史校验报告（Batch5 合并）
 
 > 生成时间：2026-06-06  
-> 工具：`node scripts/merge-all-user-news-final.js` + `services/news-history-verifier.js`  
-> 输出：`E:\FanchengFinance\data\history\news-tagged.csv`  
-> 报告 JSON：`E:\FanchengFinance\data\history\news-verification-report.json`
+> 工具：`node scripts/import-batch5-news.js` → `services/news-history-verifier.js`  
+> 权威语料：`D:\FanchengFinance\data\history\news-tagged.csv`（已同步至 `E:\FanchengFinance\data\history\`）  
+> JSON 报告：`D:\FanchengFinance\data\history\news-verification-report.json`
 
-## 概要（Batch 1–6  canonical 合并）
+## 概要
 
 | 指标 | 数量 |
 |------|------|
-| 种子行 (seeds) | 58 |
-| Batch1 import | 119 |
-| Batch2 | 35（与 batch1 重叠，净增 0） |
-| Batch3 | 46（净增 45） |
-| Batch4 | 17（净增 17） |
-| Batch5 | 24（净增 23） |
-| Batch6 | 32（净增 32） |
-| 合并后（校验前） | 293 |
-| **最终行数（校验后）** | **289** |
-| Levenshtein/同日落去重 | 1 |
-| 校验删除 | 5 |
-| 校验修正 | 34 |
+| 合并前语料行数 | ~296 |
+| **最终输出行数** | **287** |
+| 去重删除 | 8（反内卷×3、Fed 重复×2、期货开放×4→1、远兴/红海等） |
+| 日期/字段修正 | 14 |
+| 校验阶段删除 | 5 |
+| Batch5 新增净行 | ~6 |
 
-## Batch6 专项处理
+## 关键去重（Batch1–5）
 
-| 处理项 | 说明 |
-|--------|------|
-| `2026-03-06-10` → `2026-03-10` | 布伦特峰值窗口，与氨价跳涨同日 |
-| `2026-03-17` FOMC → `2026-03-18` | FOMC 2026-03-18/19，声明日 3-18 |
-| 山西沁源 2026-05-22 | batch5/6 合并为 **1 行** |
-| 美伊升级链 | 保留 2026-02-28 / 03-01 / batch5-03-08 / 03-18 全品种上移 |
-| 2026-06-16 Fed | 保留 3 行（FOMC 按兵不动 + CME 降息归零 + 加息概率 38%） |
-| 标签 | LPG→pg，W/XT 无合约已剔除（国储行 notes 保留） |
-| 哈梅内伊身亡 | 保留 geo 事件，notes 标注 **待核实** |
-| Gold $4500 | 保留用户 notes，标注 **用户情景价/待核实** |
+| 主题 | 处理 |
+|------|------|
+| 反内卷 | 保留 **2025-07-01** 中央财经委 + **2025-12-26** CEWC；删除 2025-07-15/重复「政策预期」「密集落地」 |
+| 期货对外开放 2026-01-23 | Batch4 四条 → **单行** `LC;NI;PF;PR;PX;RU;LU;BC;TA`（NR→ru） |
+| 碳酸锂 | 保留 **2025-07-15** 减产联盟 + **2026-01-13** 价格反弹（不同催化剂） |
+| 美联储 2025 末次降息 | **2025-12-10** FOMC（非 12-18）；删除 12-01/12-12 重复行 |
+| 美伊时间线 | 保留 **2025-10-20** 以军空袭伊朗 + **2026-03-08** 美伊升级 |
 
-## 日期修正（batch4/5/6 样本）
+## 重要日期修正
 
 | 原标题 | 原日期 | 修正日期 | 依据 |
 |--------|--------|----------|------|
-| 布伦特原油冲高至108美元 | 2026-03-06-10 | **2026-03-10** | 用户指定 Brent 峰值窗口 |
-| 美联储3月FOMC维持利率不变 | 2026-03-17 | **2026-03-18** | FOMC Mar 18–19 2026 |
-| 红海危机爆发 | 2023-12-14 | **2023-12-15** | 胡塞首次重大袭击约 12-15 |
-| 远兴能源纯碱一线投产 | 2023-08-01 | **2023-06-28** | 一线投产日更准确 |
-| 美联储年内最后一次降息 | 2025-12-12 | **2025-12-18** | FOMC 声明日 |
-| 美联储12月第三次降息 (batch4) | 2025-12-01 | **2025-12-18** | 同上 |
+| 美联储年内最后一次降息 | 2025-12-12 | **2025-12-10** | [Fed FOMC 2025-12-10](https://www.federalreserve.gov/newsevents/pressreleases/monetary20251210a.htm) |
+| 美联储9月降息 | 2025-09-01 | **2025-09-18** | FOMC 2025-09-17 声明 |
+| 美联储1月暂停降息 | 2026-01-29 | **2026-01-28** | [FOMC 2026-01-28](https://www.federalreserve.gov/newsevents/pressreleases/monetary20260128a.htm) |
+| 粗钢跌破10亿吨 | 2025-08-15 | **2026-01-19** | [国家统计局 2026-01-19](https://m.caixin.com/m/2026-01-19/102405284.html)：全年 **9.61亿吨**（非 8 月预估 9.98） |
+| 远兴纯碱投产 | 2023-08-01 | **2023-06-28** | 一线投产更准确 |
+| 红海危机爆发 | 2023-12-14 | **2023-12-15** | 胡塞首次大规模袭击 |
 
-## 删除/合并行（未静默删除）
+## 已核实事件
 
-| 标题 | 日期 | 操作 | 原因 |
-|------|------|------|------|
-| 山西沁源煤矿瓦斯爆炸事故 | 2026-05-22 | **合并** | 与「事故调查升级」同日落，合并 notes |
-| 反内卷政策预期 | 2025-07-15 | **删除** | 与 2025-07-01 财经委重复 |
-| 2026-01-23 对外开放 (batch4×4) | 2026-01-23 | **合并** | 四条重复 → 单行 LC;NI;PF;PR;PX;NR;LU;BC;TA |
-| 碳酸锂减产联盟成立 (batch4) | 2025-01-01 | **跳过** | batch2 已有 2025-07-15 |
+| 事件 | 日期 | 结论 |
+|------|------|------|
+| 黄金 ATH $4500 | 2025-12-24 | ✓ [Kitco/Reuters](https://www.kitco.com/news/off-the-wire/2025-12-24/gold-tops-4500-while-silver-platinum-surge-new-peaks) 盘中 $4525 |
+| 山西沁源煤矿瓦斯爆炸 | 2026-05-22 | ✓ 真实事件（留神峪煤矿 5·22 特别重大事故，[人民网 2026-05-28](http://society.people.com.cn/n1/2026/0528/c1008-40728830.html)） |
+| 粗钢全年统计 | 2026-01-19 | ✓ 官方发布日；8 月行仅为前瞻估算 |
 
-##  sensational / 待核实 claims（保留于 CSV）
+## 标签修正
 
-| 事件 | 处理 |
-|------|------|
-| 哈梅内伊遇袭身亡 (2026-02-28) | 保留 bullish geo；notes 加「待核实」 |
-| 现货黄金突破 $4500 (2025-12-24) | 保留；notes 注明用户情景价 vs 现货 ~2650 量级 |
-| 金价跌破 $4500 (2026-06-03) | 保留 bearish；notes 加「待核实」 |
-
-## 长周期回测
-
-- **合并前基线**：overall **47.0%**（19515/41495）
-- **合并后回测**：289 行 news 已写入；全量 walk-forward 已启动（74 品种，耗时数小时）；完成前命中率暂按基线 **47%** 计
+- `AP`→`AP`（郑商所苹果）、`AO`→`ao`、`EC`→`ec`、`NR`→`ru`（20号胶映射天然橡胶合约）
+- `PX` 保留 catalog `PX`；`LU`→`lu`、`BC`→`bc`
 
 ## 复现
 
 ```bash
-# 1. 保存 batch6 并 canonical 合并
-FANCHENG_HISTORY_DIR=E:\FanchengFinance\data\history node scripts/merge-all-user-news-final.js
-
-# 2. 单独校验
-npm run verify-news
-
-# 3. 长周期回测
-FANCHENG_DATA_DRIVE=E node scripts/tune-sector-weights-longrun.js
+# 设置数据盘（D 或 E，与 app 一致）
+set FANCHENG_DATA_DRIVE=D
+node scripts/import-batch5-news.js
+node scripts/tune-sector-weights-longrun.js
 ```
-
-## 历史批次（batch1–5 摘要）
-
-见上文表格。Batch1=`user-news-import.csv`，Batch2–6=`user-news-batch{N}.csv`，均位于 `E:\FanchengFinance\data\history\`。
