@@ -8,9 +8,13 @@ const path = require('path');
 process.chdir(path.join(__dirname, '..'));
 
 const newsTagged = require('../services/news-tagged-loader');
+const { normalizeTags, normalizeSourceTier } = require('../services/news-tag-normalize');
 
 const VALID_DIRECTIONS = new Set(['bullish', 'bearish', 'neutral']);
-const VALID_TIERS = new Set(['policy', 'geo', 'climate', 'commodity', 'macro', 'fed', 'fomc', 'geopolitics', 'weather']);
+const VALID_TIERS = new Set([
+  'policy', 'geo', 'climate', 'commodity', 'macro', 'fed', 'fomc', 'geopolitics', 'weather',
+  'supply', 'demand',
+]);
 
 function validateRow(row, lineNo) {
   const errors = [];
@@ -30,13 +34,14 @@ function validateRow(row, lineNo) {
 }
 
 function normalizeRow(row) {
+  const ctx = { title: row.title, notes: row.notes || '' };
   return {
     date: String(row.date).slice(0, 10),
     title: String(row.title).trim(),
-    commodity_tags: String(row.commodity_tags || '').trim(),
+    commodity_tags: normalizeTags(row.commodity_tags, ctx),
     direction: (row.direction || 'neutral').toLowerCase(),
     stars: String(Math.max(1, Math.min(5, parseInt(row.stars, 10) || 3))),
-    source_tier: (row.source_tier || 'commodity').toLowerCase(),
+    source_tier: normalizeSourceTier(row.source_tier),
     event_id: String(row.event_id || '').trim(),
     notes: String(row.notes || '').trim(),
   };

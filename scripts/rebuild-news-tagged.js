@@ -1,7 +1,9 @@
 /**
  * 从种子备份 + 全部用户批次 CSV 重建 news-tagged.csv（去重 + 标签规范化）
- * 用法: node scripts/rebuild-news-tagged.js
+ * 用法: FANCHENG_DATA_DRIVE=E node scripts/rebuild-news-tagged.js
  */
+process.env.FANCHENG_DATA_DRIVE = process.env.FANCHENG_DATA_DRIVE || 'E';
+
 const fs = require('fs');
 const path = require('path');
 
