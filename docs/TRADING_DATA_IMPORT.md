@@ -8,9 +8,64 @@
 
 | 步骤 | 您做什么 | 我们做什么 |
 |------|----------|------------|
-| **1** | 把 CSV/Excel 另存为 **UTF-8 CSV**，放到任意目录 | — |
+| **1** | 把 CSV/Excel 另存为 **UTF-8 CSV**，放到任意目录；或百度网盘 tick zip | — |
 | **2** | 运行导入命令（见下） | 校验列、按合约写入 `history/trading/` |
 | **3** | （可选）发文件名 + 合约列表说明 | 对照 `INSTRUMENT_REGISTRY` 74 品种查缺 |
+
+---
+
+## Tick Zip 批量转换（百度网盘期货 tick）
+
+若您已下载 `future_priceYYYYMM` 月文件夹（内含 `future_priceYYYYMMDD.zip`），可用脚本自动解压、流式解析、聚合日 K：
+
+### 数据位置（默认扫描）
+
+```
+E:\BaiduNetdiskDownload\
+  2017\future_price201712\future_price20171211.zip  （或已解压 .txt）
+  2018\future_price201801\future_price20180102.zip
+  2019+ ...
+```
+
+### 转换命令
+
+```bash
+cd E:\FanchengFinance\source\fancheng-finance
+
+# 全量转换（1300+ zip，耗时数小时，支持断点续跑）
+npm run convert-tick-zips
+
+# 预览前 5 个
+node scripts/convert-tick-zips-to-daily.js --limit 5 --dry-run
+
+# 仅把已有 trading/*.json 同步进 klines 缓存（供回测）
+node scripts/convert-tick-zips-to-daily.js --sync-klines
+```
+
+### 解析规则
+
+| 字段 | 用途 |
+|------|------|
+| `CONTRACTID` / `CONTRACTCODE` | 映射到 74 品种（`cu`、`rb`、`FG` 等） |
+| `LASTPX` | tick 价；日 K 开高低收 |
+| `TQ` | 成交量累加 |
+| `OPENINTS` | 日末持仓 |
+| `SETTLEMENTPX` | 优先作收盘价 |
+
+- **股指/国债跳过**：`IC/IF/IH/IM/T/TF/TS`
+- **主力选取**：同一交易日、同一品种下成交量最大的合约
+- **断点续跑**：`history/trading/tick-convert-progress.json` 记录已处理 zip
+
+### 输出
+
+```
+E:\FanchengFinance\data\history\trading\
+  cu.json   # series: { date, open, high, low, close, volume, oi }
+  rb.json
+  ...
+```
+
+转换完成后会自动 `--sync-klines`，将数据合并进 `userData/klines/commodity-{id}-day.json`，长周期回测可直接使用。
 
 新闻标注并行进行：见 `docs/NEWS_DATA_SOLUTIONS.md`（种子已自动生成 ~50 条，您 later 补 200 个关键日即可）。
 

@@ -1,7 +1,7 @@
 {
   "name": "fancheng-finance",
   "productName": "梵澄金融",
-  "version": "1.28.0",
+  "version": "1.28.1",
   "description": "全球指数、大宗商品、美联储、日本央行、美国财政部、新华社实时信息聚合桌面应用",
   "main": "electron/main.js",
   "author": "",
@@ -16,6 +16,7 @@
     "export-news-cache": "node scripts/export-news-from-cache.js",
     "merge-news": "node scripts/merge-user-news-csv.js",
     "import-trading": "node scripts/import-trading-data.js",
+    "convert-tick-zips": "node scripts/convert-tick-zips-to-daily.js",
     "backfill-news": "node scripts/backfill-news-headlines.js",
     "postinstall": "node scripts/download-electron.js"
   },
