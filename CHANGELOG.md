@@ -1,5 +1,15 @@
 # 更新日志
 
+## v1.28.2 — 2026-06-06
+
+### 新闻标注历史校验
+
+- **`services/news-history-verifier.js`** + **`scripts/verify-news-tagged.js`**：对照 Fed/OPEC/印尼政策/巴以冲突等公开史料校正 `news-tagged.csv` 日期与标签
+- 输出 `data/history/news-verification-report.json`；详见 `docs/NEWS_VERIFICATION.md`
+- 命令：`npm run verify-news`
+
+---
+
 ## v1.28.1 — 2026-06-06
 
 ### 新增：期货 tick zip → 日 K 转换管线

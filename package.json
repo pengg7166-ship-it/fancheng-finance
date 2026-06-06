@@ -15,6 +15,7 @@
     "seed-news": "node scripts/seed-news-from-events.js",
     "export-news-cache": "node scripts/export-news-from-cache.js",
     "merge-news": "node scripts/merge-user-news-csv.js",
+    "verify-news": "node scripts/verify-news-tagged.js",
     "import-trading": "node scripts/import-trading-data.js",
     "convert-tick-zips": "node scripts/convert-tick-zips-to-daily.js",
     "backfill-news": "node scripts/backfill-news-headlines.js",
