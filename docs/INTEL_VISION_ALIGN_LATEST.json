@@ -1,0 +1,519 @@
+{
+  "asOf": "2026-07-17",
+  "method": "capability probe + honest depth/product overlay",
+  "orchVersion": "v2.89.26-intel-center-quality-debt-repay",
+  "teachVersion": "v2.89.26-teaching",
+  "scopeNote": "编号主体 §20–80。§1–19 不在本蓝图；docs/VISION_CHECKLIST.md 为更早交易指导愿景（另册，多数已 ✅）。",
+  "verdict": "CAPABILITY_FULLY_ALIGNED_SCOPE_20_80",
+  "oneLiner": "§20–80 能力主链路已齐（含 LLM 输出边界与质量债公开）。工程 PASS ≠ 预测变准；hit 须持续带 n 公示。",
+  "talliesAll": {
+    "MET": 61,
+    "PARTIAL": 0,
+    "GAP": 0
+  },
+  "talliesCodeOnly": {
+    "MET": 55,
+    "PARTIAL": 0,
+    "GAP": 0
+  },
+  "metPctCode": 100,
+  "partialPctCode": 0,
+  "vsPrior": {
+    "priorDate": "2026-07-16",
+    "priorNote": "首轮自审：真落地~7、多数半成品；证伪/学习/三面孔/双轨/五命令等为缺口",
+    "closedSincePrior": [
+      "§47 证伪真判",
+      "§54 博物馆原子入馆",
+      "§55/69 标注→权人审",
+      "§26 三面孔分轨",
+      "§29 双轨叙事",
+      "§28 基差一等公民",
+      "§41/48 Surprise+n 门禁",
+      "§63 五个一键",
+      "§72 证据三轴",
+      "§59 记忆回放",
+      "§73 剧本包",
+      "§38/76 编译发行",
+      "§70 假静默闭环",
+      "§30 元智还债桥",
+      "§20/75 幕僚全页+矛盾板",
+      "§24 同构路径回放",
+      "§50 冲击边验证阻尼",
+      "§22 离散SIR上限",
+      "§42 冲击边图库",
+      "§45 指挥条",
+      "§74 共享机制链",
+      "§26 Hub三壳",
+      "§71 下令队列",
+      "§31/62 反模式板",
+      "§60 LLM 输出边界",
+      "P10 预测质量债"
+    ]
+  },
+  "acceptLatestHint": {
+    "museumIntake": true,
+    "analystWeight": true,
+    "llmBoundary": true,
+    "qualityDebt": true,
+    "visionClosing": true
+  },
+  "remainingPartials": [],
+  "remainingGaps": [],
+  "nextSuggested": [
+    {
+      "id": "Q1",
+      "title": "预测质量债持续还债（进行中）",
+      "why": "扩 accept WF / 全市场 stateKey 校准；看板已挂欠样·缺口·还债动作"
+    },
+    {
+      "id": "Q2",
+      "title": "进程级 LLM 沙箱（可选）",
+      "why": "当前为输出门禁；真隔离属基础设施另册"
+    }
+  ],
+  "items": [
+    {
+      "n": 20,
+      "title": "首席幕僚·决策备忘录",
+      "status": "MET",
+      "layer": "capability",
+      "evidence": "detail memo-primary + hard template + list 幕僚"
+    },
+    {
+      "n": 21,
+      "title": "信念度谱",
+      "status": "MET",
+      "layer": "capability",
+      "evidence": "claim confidence + falsifying/falsified STATUS"
+    },
+    {
+      "n": 22,
+      "title": "叙事流行病学",
+      "status": "MET",
+      "layer": "capability",
+      "evidence": "discrete-sir-census+lagStats+sirCeiling",
+      "note": "离散 S/I/R + 滞后 n；拒绝 ODE 拟合"
+    },
+    {
+      "n": 23,
+      "title": "红队拆台入库",
+      "status": "MET",
+      "layer": "capability",
+      "evidence": "red-team → against / dissentDebt"
+    },
+    {
+      "n": 24,
+      "title": "canonical/同构 case",
+      "status": "MET",
+      "layer": "capability",
+      "evidence": "pathReplay hist/recent + sampleReplays",
+      "note": "真实日K pearson 窗口回放；非全量 OHLC 战役引擎 UI"
+    },
+    {
+      "n": 25,
+      "title": "注意力预算真配额",
+      "status": "MET",
+      "layer": "capability",
+      "evidence": "full/lite/skip + ration board"
+    },
+    {
+      "n": 26,
+      "title": "三面孔分轨",
+      "status": "MET",
+      "layer": "capability",
+      "evidence": "face shellLayout + Hub chrome per face",
+      "note": "Hub内三壳布局；非三套独立应用"
+    },
+    {
+      "n": 27,
+      "title": "时间政治·日历",
+      "status": "MET",
+      "layer": "capability",
+      "evidence": "intelligenceCalendar"
+    },
+    {
+      "n": 28,
+      "title": "基差/期限结构",
+      "status": "MET",
+      "layer": "capability",
+      "evidence": "term-basis → Evidence DSL"
+    },
+    {
+      "n": 29,
+      "title": "内外盘双轨叙事",
+      "status": "MET",
+      "layer": "capability",
+      "evidence": "dual-narrative attach"
+    },
+    {
+      "n": 30,
+      "title": "元智能盲区",
+      "status": "MET",
+      "layer": "capability",
+      "evidence": "meta + debtBridge + mergeMetaBridgeIntoDebtBoard"
+    },
+    {
+      "n": 31,
+      "title": "失败模式/反目标",
+      "status": "MET",
+      "layer": "capability",
+      "evidence": "anti-pattern-board + Hub",
+      "note": "反模式板聚合真实命中；零命中暂无"
+    },
+    {
+      "n": 32,
+      "title": "操纵抗性",
+      "status": "MET",
+      "layer": "capability",
+      "evidence": "anti-manipulation + analyst flag"
+    },
+    {
+      "n": 33,
+      "title": "情报呼吸/节奏",
+      "status": "MET",
+      "layer": "capability",
+      "evidence": "quiet-brake + shift schedule"
+    },
+    {
+      "n": 34,
+      "title": "理念收束",
+      "status": "MET",
+      "layer": "meta",
+      "evidence": "philosophy"
+    },
+    {
+      "n": 35,
+      "title": "选择集 A/B/C",
+      "status": "MET",
+      "layer": "capability",
+      "evidence": "intel-choice-set"
+    },
+    {
+      "n": 36,
+      "title": "Evidence DSL",
+      "status": "MET",
+      "layer": "capability",
+      "evidence": "evidence-dsl fields"
+    },
+    {
+      "n": 37,
+      "title": "Unknown Map",
+      "status": "MET",
+      "layer": "capability",
+      "evidence": "unknown board"
+    },
+    {
+      "n": 38,
+      "title": "研究编译发行",
+      "status": "MET",
+      "layer": "capability",
+      "evidence": "research-compile + product path"
+    },
+    {
+      "n": 39,
+      "title": "价格作反馈通道",
+      "status": "MET",
+      "layer": "capability",
+      "evidence": "processCorrect vs directionHit"
+    },
+    {
+      "n": 40,
+      "title": "改口一等公民",
+      "status": "MET",
+      "layer": "capability",
+      "evidence": "revisions.jsonl + recordRevision"
+    },
+    {
+      "n": 41,
+      "title": "Surprise×可行动",
+      "status": "MET",
+      "layer": "capability",
+      "evidence": "empirical surprise + gate requireN"
+    },
+    {
+      "n": 42,
+      "title": "冲击网络",
+      "status": "MET",
+      "layer": "capability",
+      "evidence": "edge-catalog + multihop",
+      "note": "验证边图库(corr/n/命中)；非全量学习发现新边"
+    },
+    {
+      "n": 43,
+      "title": "分析师定性标注",
+      "status": "MET",
+      "layer": "capability",
+      "evidence": "UI annotate + JSONL"
+    },
+    {
+      "n": 44,
+      "title": "最小诚实输出",
+      "status": "MET",
+      "layer": "capability",
+      "evidence": "gates + staff + 暂无"
+    },
+    {
+      "n": 45,
+      "title": "指挥研究团队体验",
+      "status": "MET",
+      "layer": "capability",
+      "evidence": "commanderWorkbar + five cmds",
+      "note": "指挥条绑定五键+真实待办；非独立指挥 OS"
+    },
+    {
+      "n": 46,
+      "title": "命题库",
+      "status": "MET",
+      "layer": "capability",
+      "evidence": "claim-library lifecycle"
+    },
+    {
+      "n": 47,
+      "title": "证伪时钟真判",
+      "status": "MET",
+      "layer": "capability",
+      "evidence": "structure/price/expiry → falsified + museumWritten"
+    },
+    {
+      "n": 48,
+      "title": "Surprise 带 n",
+      "status": "MET",
+      "layer": "capability",
+      "evidence": "empirical nDisplay"
+    },
+    {
+      "n": 49,
+      "title": "定价状态层",
+      "status": "MET",
+      "layer": "capability",
+      "evidence": "pricing-state"
+    },
+    {
+      "n": 50,
+      "title": "冲击边活化",
+      "status": "MET",
+      "layer": "capability",
+      "evidence": "edge-verify dampen n≥5",
+      "note": "史命中阻尼激活；无档案标暂无"
+    },
+    {
+      "n": 51,
+      "title": "三时间尺度协同",
+      "status": "MET",
+      "layer": "capability",
+      "evidence": "intel-horizon-coordination conflict OS"
+    },
+    {
+      "n": 52,
+      "title": "矛盾矩阵",
+      "status": "MET",
+      "layer": "capability",
+      "evidence": "contradictionBoard Hub + main×oppose + detail board"
+    },
+    {
+      "n": 53,
+      "title": "场景格实证化",
+      "status": "MET",
+      "layer": "capability",
+      "evidence": "scenario-lattice hitDisplay/evidence"
+    },
+    {
+      "n": 54,
+      "title": "失效博物馆",
+      "status": "MET",
+      "layer": "capability",
+      "evidence": "writeMuseumIntake + todayIntake"
+    },
+    {
+      "n": 55,
+      "title": "分析师工作台闭环",
+      "status": "MET",
+      "layer": "capability",
+      "evidence": "reliability + ingestAnalystWeightSignal + human ack"
+    },
+    {
+      "n": 56,
+      "title": "三层推送",
+      "status": "MET",
+      "layer": "capability",
+      "evidence": "pushTier interrupt/watch/archive"
+    },
+    {
+      "n": 57,
+      "title": "发布门禁",
+      "status": "MET",
+      "layer": "capability",
+      "evidence": "publish-gates requireN"
+    },
+    {
+      "n": 58,
+      "title": "KPI 非命中崇拜",
+      "status": "MET",
+      "layer": "capability",
+      "evidence": "kpi sampleDisplay + process"
+    },
+    {
+      "n": 59,
+      "title": "记忆检索回放",
+      "status": "MET",
+      "layer": "capability",
+      "evidence": "searchIntelMemory + replayClaimTimeline"
+    },
+    {
+      "n": 60,
+      "title": "LLM 边界",
+      "status": "MET",
+      "layer": "capability",
+      "evidence": "intel-llm-boundary + fusion/cursor gate + teaching + Hub strip",
+      "note": "输出侧硬拦编造价格/n/命中率；非进程级 LLM 沙箱"
+    },
+    {
+      "n": 61,
+      "title": "数据运维循环",
+      "status": "MET",
+      "layer": "capability",
+      "evidence": "debt-ops heal/run"
+    },
+    {
+      "n": 62,
+      "title": "反模式清单",
+      "status": "MET",
+      "layer": "capability",
+      "evidence": "anti-pattern-board catalog + Hub",
+      "note": "独立反模式看板；仅真实命中"
+    },
+    {
+      "n": 63,
+      "title": "五个一键命令",
+      "status": "MET",
+      "layer": "capability",
+      "evidence": "intel-five-cmds ①–⑤ in Hub"
+    },
+    {
+      "n": 64,
+      "title": "实施顺序（元）",
+      "status": "MET",
+      "layer": "meta",
+      "evidence": "process"
+    },
+    {
+      "n": 65,
+      "title": "概念图（元）",
+      "status": "MET",
+      "layer": "meta",
+      "evidence": "docs"
+    },
+    {
+      "n": 66,
+      "title": "终局段落（理念）",
+      "status": "MET",
+      "layer": "meta",
+      "evidence": "philosophy"
+    },
+    {
+      "n": 67,
+      "title": "值班制度+文风",
+      "status": "MET",
+      "layer": "capability",
+      "evidence": "shift + SHIFT_VOICE"
+    },
+    {
+      "n": 68,
+      "title": "问题债务+还债",
+      "status": "MET",
+      "layer": "capability",
+      "evidence": "debt board + ops"
+    },
+    {
+      "n": 69,
+      "title": "过程正确 vs 预测",
+      "status": "MET",
+      "layer": "capability",
+      "evidence": "process-learning human ack + analyst signals"
+    },
+    {
+      "n": 70,
+      "title": "沉默权/假静默",
+      "status": "MET",
+      "layer": "capability",
+      "evidence": "quietDay + falseQuiet loop ack"
+    },
+    {
+      "n": 71,
+      "title": "指挥官下令交互",
+      "status": "MET",
+      "layer": "capability",
+      "evidence": "commander orderQueue bind debt/weight/fq/interrupt",
+      "note": "决策壳下令队列；非独立指挥 OS"
+    },
+    {
+      "n": 72,
+      "title": "证据三轴",
+      "status": "MET",
+      "layer": "capability",
+      "evidence": "evidence-triad hot_soft/cold_hard"
+    },
+    {
+      "n": 73,
+      "title": "合证剧本切换",
+      "status": "MET",
+      "layer": "capability",
+      "evidence": "playbook regime script packs"
+    },
+    {
+      "n": 74,
+      "title": "跨品种共享机制",
+      "status": "MET",
+      "layer": "capability",
+      "evidence": "shared-mechanism-chains + honesty",
+      "note": "共享机制链+成员覆盖；非独立因果推理引擎"
+    },
+    {
+      "n": 75,
+      "title": "备忘录硬模板",
+      "status": "MET",
+      "layer": "capability",
+      "evidence": "intel-memo-hard first viewport; extras folded"
+    },
+    {
+      "n": 76,
+      "title": "研判版本化发行",
+      "status": "MET",
+      "layer": "capability",
+      "evidence": "compileResearchRelease + compareToRelease"
+    },
+    {
+      "n": 77,
+      "title": "自信通胀刹车",
+      "status": "MET",
+      "layer": "capability",
+      "evidence": "confidenceBrake"
+    },
+    {
+      "n": 78,
+      "title": "教学层",
+      "status": "MET",
+      "layer": "capability",
+      "evidence": "teaching LESSONS + pack"
+    },
+    {
+      "n": 79,
+      "title": "虚拟研究所隐喻",
+      "status": "MET",
+      "layer": "meta",
+      "evidence": "org metaphor"
+    },
+    {
+      "n": 80,
+      "title": "不建议做的清醒话",
+      "status": "MET",
+      "layer": "meta",
+      "evidence": "anti-goals / no fake data"
+    }
+  ],
+  "honesty": [
+    "工程 PASS / 能力 MET ≠ 预测变准（hit 仍 ~48.6%）",
+    "PARTIAL 不是「没做」，是「低于构想上限」或「产品形态未到位」",
+    "不可为对齐而编造深度"
+  ]
+}

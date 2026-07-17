@@ -15,12 +15,13 @@
         <div class="logo">梵</div>
         <div>
           <h1>梵澄金融</h1>
-          <p class="subtitle">全球指数 · 大宗商品 · 中美宏观 · 外汇 · 政策雷达 · 美联储 · 日本央行 · 美国财政部 · 新华社</p>
+          <p class="subtitle">全球指数 · 大宗商品 · 中美宏观 · 外汇 · 政策雷达 · 地缘政治 · 天气气候 · 大宗走势研判 · 美联储 · 日本央行 · 美国财政部 · 新华社</p>
         </div>
       </div>
       <div class="header-actions">
         <span class="last-updated" id="lastUpdated">正在加载…</span>
         <span class="live-badge hidden" id="liveBadge">● 实时刷新</span>
+        <span class="flash-news-badge hidden" id="flashNewsBadge" title="待核验快讯">快讯 0</span>
         <button class="btn btn-ghost" id="settingsBtn" type="button" title="设置">⚙ 设置</button>
         <button class="btn btn-primary" id="refreshBtn" type="button">
           <span class="btn-icon">↻</span> 刷新
@@ -34,6 +35,12 @@
       <button class="tab" data-tab="macro" role="tab">中美宏观</button>
       <button class="tab" data-tab="forex" role="tab">外汇</button>
       <button class="tab" data-tab="policy" role="tab">政策雷达</button>
+      <button class="tab" data-tab="geopolitics" role="tab">地缘政治</button>
+      <button class="tab" data-tab="climate" role="tab">天气气候</button>
+      <button class="tab tab-outlook-core nav-tab--core" data-tab="outlook" role="tab" title="核心研判 · 研判为纲 · 变才是主部 · 全板块数据汇入">
+        <span class="tab-core-icon" aria-hidden="true">◆</span><span class="tab-core-label">大宗走势研判</span><span class="tab-core-badge">核心</span>
+      </button>
+      <button class="tab" data-tab="quant" role="tab" title="量化 · 信号从属于研判与哲学 gate">量化交易</button>
       <button class="tab" data-tab="fed" role="tab">美联储</button>
       <button class="tab" data-tab="boj" role="tab">日本央行</button>
       <button class="tab" data-tab="treasury" role="tab">美国财政部</button>
@@ -51,8 +58,9 @@
 
     <footer class="footer">
       <span>数据来源：新浪财经 · 新华社 · CNBC · 圣路易斯联储 · 日本央行 · 美国财政部 · 东方财富 · 金十数据</span>
+      <button type="button" class="btn-link footer-philosophy-link" id="philosophyFooterLink">梵澄哲学</button>
       <span id="fredHint" class="hint"></span>
-      <span id="appVersion" class="hint">v1.23.1</span>
+      <span id="appVersion" class="hint">v…</span>
     </footer>
   </div>
 
@@ -107,6 +115,24 @@
           <p class="settings-desc">政策雷达标签页与后台推送默认 30 秒抓取最新部委政策</p>
         </section>
         <section class="settings-section">
+          <h3>7×24 快讯抓取</h3>
+          <div class="settings-row">
+            <label for="flashNewsAutoFetch">启动后自动抓取</label>
+            <input id="flashNewsAutoFetch" type="checkbox" checked />
+          </div>
+          <div class="settings-row">
+            <label for="flashNewsRefreshMinutes">间隔（分钟）</label>
+            <input id="flashNewsRefreshMinutes" type="number" min="5" max="120" value="10" />
+          </div>
+          <p class="settings-desc">写入 data/history/flash-news-inbox.json，不自动合并 news-tagged.csv</p>
+          <button class="btn btn-ghost" id="flashNewsFetchNowBtn" type="button">立即抓取快讯</button>
+        </section>
+        <section class="settings-section">
+          <h3>梵澄哲学</h3>
+          <p class="settings-desc">产品哲学：变化优先 · 研判为纲 · 缠论为术 · 三槽校正 · 实证对照 · 审慎 gate</p>
+          <button type="button" class="btn btn-ghost" id="philosophySettingsLink">阅读梵澄哲学</button>
+        </section>
+        <section class="settings-section">
           <h3>全量刷新</h3>
           <div class="settings-row">
             <label for="refreshInterval">间隔（分钟）</label>
@@ -120,9 +146,21 @@
     </div>
   </div>
 
+  <div id="philosophyModal" class="modal hidden" role="dialog" aria-labelledby="philosophyModalTitle">
+    <div class="modal-backdrop" id="philosophyModalBackdrop"></div>
+    <div class="modal-panel philosophy-modal-panel">
+      <div class="modal-header">
+        <h2 id="philosophyModalTitle">梵澄哲学</h2>
+        <button class="modal-close" id="philosophyModalClose" type="button" aria-label="关闭">×</button>
+      </div>
+      <div class="modal-body philosophy-modal-scroll"></div>
+    </div>
+  </div>
+
   <script src="i18n.js"></script>
   <script src="chart.js"></script>
   <script src="commodities.js"></script>
+  <script src="fancheng-ai-preset-chips.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

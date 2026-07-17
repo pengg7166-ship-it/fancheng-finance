@@ -4,7 +4,7 @@
 const fs = require('fs');
 const path = require('path');
 const { getDataDir } = require('./data-paths');
-const { INSTRUMENT_REGISTRY, scoreToDirection, computeNextDayRangePct, buildFactorBreakdown, computeCapitalAttention, buildMacroScoresForInstrument, parseVix } = require('./commodity-outlook-engine');
+const { INSTRUMENT_REGISTRY, scoreToDirection, computeNextDayRangePct, buildFactorBreakdown, computeCapitalAttention, computeInventoryScore, buildMacroScoresForInstrument, parseVix } = require('./commodity-outlook-engine');
 const philosophy = require('./commodity-outlook-philosophy');
 const marketAdaptive = require('./commodity-market-adaptive');
 const calibration = require('./commodity-outlook-calibration');
@@ -16,17 +16,153 @@ const { getCachedAllData } = require('./data-fetcher');
 const historicalContext = require('./commodity-outlook-historical-context');
 const eventCalendar = require('./commodity-outlook-event-calendar');
 const newsTagged = require('./news-tagged-loader');
+const { computeT3TrendLabel, hitDirection: hitDirectionLabel } = require('./outlook-labels');
+const { classifyMarketRegime } = require('./market-regime-classifier');
+const { computeOiBehaviorAtBar, computeOiDivergenceRate5d } = require('./oi-behavior-features');
+const { getTermStructureAtDate, getTermStructureChg5dAtDate } = require('./term-structure-fetcher');
+const { getWarehouseReceiptChg5dAtDate } = require('./shfe-warehouse-fetcher');
+const { buildStockFlowJoint, getOiChgNdAtDate } = require('./inventory-capital-joint');
+const { getGldHoldingsChg5dAtDate } = require('./precious-etf-fetcher');
+const { getSlvHoldingsChg5dAtDate } = require('./slv-etf-fetcher');
+const { getCuIndustrialProxyAtDate } = require('./ag-industrial-proxy');
+const { getInventoryChgWowAtDate } = require('./lme-inventory-fetcher');
+const { lookupSeriesByDate, getHistoryDir: getFredHistoryDir } = require('./fred-history-fetcher');
 
 const MIN_BARS = 60;
 const MIN_WALK_START = 25;
 const LONG_RUN_START = historicalContext.LONG_RUN_START;
-const LONG_RUN_VERSION = 'v1.28.0';
+const LONG_RUN_VERSION = 'v1.32.1';
+/** 高置信 KPI 门控：|compositeScore| 低于此值的 bull/bear 不计入主 KPI */
+const CONFIDENCE_GATE_ABS_SCORE = 0.12;
 
 let backtestRunning = false;
 let backtestProgress = { phase: 'idle', pct: 0, message: '' };
 
 function clamp(n, min, max) {
   return Math.max(min, Math.min(max, n));
+}
+
+let _fredSeriesCache = null;
+
+function preloadWalkForwardCaches() {
+  if (_fredSeriesCache) return;
+  try {
+    const fp = path.join(getFredHistoryDir(), 'fred-real10y-daily.json');
+    if (fs.existsSync(fp)) {
+      const raw = JSON.parse(fs.readFileSync(fp, 'utf8'));
+      _fredSeriesCache = raw.series || raw.data || [];
+    } else {
+      _fredSeriesCache = [];
+    }
+  } catch {
+    _fredSeriesCache = [];
+  }
+}
+
+function computeFredChg5dPct(series, barDate) {
+  if (!series?.length || !barDate) return null;
+  const cur = lookupSeriesByDate(series, barDate);
+  if (cur == null) return null;
+  const d = new Date(`${String(barDate).slice(0, 10)}T12:00:00`);
+  d.setDate(d.getDate() - 5);
+  const past = lookupSeriesByDate(series, d.toISOString().slice(0, 10));
+  if (past == null || past === 0) return null;
+  return +(((cur - past) / past) * 100).toFixed(4);
+}
+
+/** Walk-forward flatRow fields + T+3 labels (probe / logistic aligned). */
+function enrichWalkForwardFlatRow(spec, bars, tIndex, row, ctx = {}) {
+  const barDate = row.date;
+  const technical = ctx.technical || {};
+  const newsImpact = ctx.newsImpact || {};
+  const oiBehavior = computeOiBehaviorAtBar(bars, tIndex);
+  const oiDiv5d = computeOiDivergenceRate5d(bars, tIndex);
+  const term = getTermStructureAtDate(spec.id, barDate);
+  const cuProxy = getCuIndustrialProxyAtDate(barDate);
+  const l1 = classifyMarketRegime({
+    barDate,
+    sector: spec.sector,
+    instrumentId: spec.id,
+    barIndex: tIndex,
+    bars,
+    klines: bars.slice(Math.max(0, tIndex + 1 - 120), tIndex + 1),
+    technical,
+    newsImpact,
+    oiBehavior,
+    basis: term
+      ? { spreadPct: term.spreadPct, zScore: term.zScore }
+      : null,
+  });
+  const t3 = computeT3TrendLabel(bars, tIndex);
+  const real10ySeries = _fredSeriesCache || [];
+  const enriched = {
+    instrumentId: spec.id,
+    marketRegime: l1?.regime ?? null,
+    marketRegimeLabel: l1?.regimeLabel ?? null,
+    marketRegimeReasons: l1?.reasons ?? [],
+    marketRegimeVersion: l1?.version ?? null,
+    oiBehavior: {
+      ...oiBehavior,
+      oi_change_pct: oiBehavior.oi_change_pct,
+      oi_divergence_rate_5d: oiDiv5d,
+    },
+    term_spread_pct: term?.spreadPct ?? null,
+    term_z_score: term?.zScore ?? null,
+    term_spread_chg_5d: getTermStructureChg5dAtDate(spec.id, barDate),
+    termStructure: term,
+    warehouseReceipt_chg_5d: getWarehouseReceiptChg5dAtDate(spec.id, barDate),
+    oi_chg_5d: getOiChgNdAtDate(spec.id, barDate, 5)?.pct ?? null,
+    stockFlowJoint: (() => {
+      const joint = buildStockFlowJoint(spec.id, barDate);
+      if (!joint) return { available: false, reason: 'missing' };
+      if (!joint.available) {
+        return {
+          available: false,
+          reason: joint.reason || 'insufficient',
+          dataSource: joint.dataSource || null,
+          method: joint.method || null,
+          version: joint.version || null,
+        };
+      }
+      return {
+        available: true,
+        version: joint.version,
+        structureBias: joint.structureBias,
+        coherence: joint.coherence,
+        primaryHorizon: joint.primaryHorizon,
+        primaryLabel: joint.primaryLabel,
+        supportsLong: joint.supportsLong,
+        supportsShort: joint.supportsShort,
+        opposesLong: joint.opposesLong,
+        opposesShort: joint.opposesShort,
+        priceMayLag: joint.priceMayLag,
+        dataSource: joint.dataSource,
+        method: joint.method,
+        horizons: Object.fromEntries(
+          Object.entries(joint.horizons || {}).map(([k, h]) => [
+            k,
+            {
+              warehousePct: h?.warehousePct ?? null,
+              oiPct: h?.oiPct ?? null,
+              regime: h?.regime || null,
+              label: h?.label || null,
+            },
+          ])
+        ),
+      };
+    })(),
+    real10y_chg_5d: computeFredChg5dPct(real10ySeries, barDate),
+    gldHoldings_chg_5d: getGldHoldingsChg5dAtDate(barDate),
+    slvHoldings_chg_5d: getSlvHoldingsChg5dAtDate(barDate),
+    cu_momentum_5d: cuProxy?.cu_momentum_5d ?? null,
+    cu_term_spread_pct: cuProxy?.cu_term_spread_pct ?? null,
+    cu_term_z_score: cuProxy?.cu_term_z_score ?? null,
+    lmeInventory_chg_wow: getInventoryChgWowAtDate(spec.id, barDate),
+    actualDirT3: t3.label ?? null,
+    actualReturnT3: t3.returnPct ?? null,
+    hitDirectionT3: hitDirectionLabel(row.predictedDir, t3.label),
+  };
+  return enriched;
 }
 
 function getBacktestRoot() {
@@ -99,8 +235,8 @@ function applyMacroEventMultipliers(macroScores, multipliers = {}) {
   };
 }
 
-function predictAtBarIndexHistorical(spec, bars, tIndex, weights, prevFinanceRegime = 'neutral') {
-  if (tIndex < MIN_WALK_START || tIndex >= bars.length - 1) return null;
+function predictAtBarIndexHistorical(spec, bars, tIndex, weights, prevFinanceRegime = 'neutral', opts = {}) {
+  if (tIndex < MIN_WALK_START || tIndex >= bars.length - 3) return null;
 
   const sliceStart = Math.max(0, tIndex + 1 - 120);
   const slice = bars.slice(sliceStart, tIndex + 1);
@@ -169,18 +305,31 @@ function predictAtBarIndexHistorical(spec, bars, tIndex, weights, prevFinanceReg
     macroScores,
   });
 
+  const capitalAttention = computeCapitalAttention(technical, liveQuote, null, {
+    instrumentId: spec.id,
+    asOf: barDate,
+  });
+  const inventoryFactor = computeInventoryScore(technical, profile, spec.id, barDate);
   const factorBreakdown = buildFactorBreakdown({
     profile,
     macroScores,
     technical,
-    capitalAttention: computeCapitalAttention(technical, liveQuote, null),
+    capitalAttention,
     newsImpact,
-    inventoryScore: technical.oi?.score ?? 0,
+    inventoryScore: inventoryFactor?.score ?? 0,
     weatherScore: 0,
     volBiasParts: { volBias: 0 },
     regime: histRegime,
   });
   let factorComposite = clamp((factorBreakdown._sum ?? 0), -1, 1);
+  // 合证已入 inventoryScore；若仍有 jointSignal 且 inventory 未带上，作审计补丁（不应常态触发）
+  if (
+    inventoryFactor?.jointSignal?.reason !== 'joint_applied' &&
+    capitalAttention?.jointSignal?.reason === 'joint_applied' &&
+    capitalAttention.jointSignal.delta != null
+  ) {
+    factorComposite = clamp(factorComposite + capitalAttention.jointSignal.delta * 0.5, -1, 1);
+  }
   const capMult = eventCtxMerged.weightMultipliers?.capitalSentiment ?? 1;
   if (capMult !== 1) {
     factorComposite = clamp(factorComposite * capMult, -1, 1);
@@ -190,14 +339,51 @@ function predictAtBarIndexHistorical(spec, bars, tIndex, weights, prevFinanceReg
   const philMult = eventCtxMerged.weightMultipliers?.philosophy ?? 1;
   if (philMult !== 1) philosophyScore = clamp(philosophyScore * philMult, -1, 1);
 
-  let compositeScore = calibration.blendSectorComposite({
-    philosophyScore,
-    adaptiveScore: adaptive.compositeScore,
-    factorComposite,
-    sector: spec.sector,
-    date: barDate,
-    eventCtx: eventCtxMerged,
-  });
+  let compositeScore = 0;
+  let intelKernel = null;
+  try {
+    const intel = require('./outlook-intelligence-kernel');
+    const baseBlend = calibration.getCompositeWeights(barDate, eventCtxMerged, spec.sector);
+    intelKernel = intel.evaluateIntelligenceKernel({
+      phil,
+      stockFlow: inventoryFactor?.stockFlowJoint || null,
+      jointSignal: inventoryFactor?.jointSignal || null,
+      capitalAttention,
+      technical,
+      newsImpact,
+      regime: histRegime,
+      baseBlend,
+      sourceLaneCount: dataQuality,
+      inventoryFactor,
+    });
+    if (intelKernel?.available) {
+      const blended = intel.blendWithKernelWeights(
+        philosophyScore,
+        adaptive.compositeScore,
+        factorComposite,
+        intelKernel.conditionalWeights
+      );
+      compositeScore = intel.applyConviction(blended.score, intelKernel.conviction);
+    } else {
+      compositeScore = calibration.blendSectorComposite({
+        philosophyScore,
+        adaptiveScore: adaptive.compositeScore,
+        factorComposite,
+        sector: spec.sector,
+        date: barDate,
+        eventCtx: eventCtxMerged,
+      });
+    }
+  } catch {
+    compositeScore = calibration.blendSectorComposite({
+      philosophyScore,
+      adaptiveScore: adaptive.compositeScore,
+      factorComposite,
+      sector: spec.sector,
+      date: barDate,
+      eventCtx: eventCtxMerged,
+    });
+  }
 
   let dirTier = calibration.scoreToDirectionTier(compositeScore, spec.sector, profile.directionThresholds, technical.smoothedVol);
   const adv = calibration.applyAdvancedDirectionFilters({
@@ -253,7 +439,7 @@ function predictAtBarIndexHistorical(spec, bars, tIndex, weights, prevFinanceReg
   const gapPct = actualReturn != null && predictedMid != null ? actualReturn - predictedMid : null;
   const matrixCell = `${phil.supplyDemand?.state || 'balanced'}×${phil.financialEnvironment?.regime || 'neutral'}`;
 
-  return {
+  const base = {
     date: barDate || `T${tIndex}`,
     era: historicalContext.classifyEra(barDate),
     predictedMid: predictedMid != null ? +Number(predictedMid).toFixed(4) : null,
@@ -273,6 +459,32 @@ function predictAtBarIndexHistorical(spec, bars, tIndex, weights, prevFinanceReg
     matrixCell,
     eventIds: eventCtx.eventIds,
     financeRegimeNext: phil.financialEnvironment?.regime || prevFinanceRegime,
+    // Also store joint decision audit on flat row when inventory applied it
+    jointDecision: inventoryFactor?.jointSignal
+      ? {
+          reason: inventoryFactor.jointSignal.reason,
+          delta: inventoryFactor.jointSignal.delta,
+          regime: inventoryFactor.jointSignal.regime,
+          version: inventoryFactor.jointSignal.version,
+        }
+      : null,
+    inventoryDataSource: inventoryFactor?.dataSource || null,
+    intelligenceKernel: intelKernel?.available
+      ? {
+          stateKey: intelKernel.stateKey,
+          summary: intelKernel.summary,
+          dissentStrength: intelKernel.dissent?.dissentStrength ?? null,
+          opposing: (intelKernel.dissent?.opposingEvidence || []).slice(0, 3),
+          convictionScale: intelKernel.conviction?.scale ?? null,
+          mainContradiction: intelKernel.mainContradiction?.label || null,
+          version: intelKernel.version,
+        }
+      : null,
+  };
+
+  return {
+    ...base,
+    ...enrichWalkForwardFlatRow(spec, bars, tIndex, base, { technical, newsImpact }),
   };
 }
 
@@ -281,7 +493,7 @@ function aggregateEraStats(dayRows) {
   for (const row of dayRows) {
     if (!row.era) continue;
     if (!byEra[row.era]) byEra[row.era] = { hits: 0, total: 0 };
-    if (row.predictedDir && row.predictedDir !== 'neutral' && row.actualDir) {
+    if (isDirectionScoredRow(row)) {
       byEra[row.era].total += 1;
       if (row.hitDirection) byEra[row.era].hits += 1;
     }
@@ -304,7 +516,7 @@ function aggregateMatrixStats(dayRows) {
   for (const row of dayRows) {
     if (!row.matrixCell) continue;
     if (!byCell[row.matrixCell]) byCell[row.matrixCell] = { hits: 0, total: 0 };
-    if (row.predictedDir && row.predictedDir !== 'neutral' && row.actualDir) {
+    if (isDirectionScoredRow(row)) {
       byCell[row.matrixCell].total += 1;
       if (row.hitDirection) byCell[row.matrixCell].hits += 1;
     }
@@ -321,14 +533,12 @@ function aggregateMatrixStats(dayRows) {
 }
 
 function aggregateLongrunInstrument(dayRows) {
-  const scored = dayRows.filter((d) => d.predictedDir && d.predictedDir !== 'neutral' && d.actualDir);
-  const hits = scored.filter((d) => d.hitDirection).length;
-  const total = scored.length;
-  const gaps = scored.filter((d) => d.gapPct != null).map((d) => Math.abs(d.gapPct));
+  const { hits, total, hitRate } = aggregateScoredHits(dayRows);
+  const gaps = dayRows.filter((d) => isDirectionScoredRow(d) && d.gapPct != null).map((d) => Math.abs(d.gapPct));
   return {
     hits,
     total,
-    hitRate: total > 0 ? hits / total : null,
+    hitRate,
     avgGapPct: gaps.length ? +(gaps.reduce((s, g) => s + g, 0) / gaps.length).toFixed(4) : null,
     walkDays: dayRows.length,
     byEra: aggregateEraStats(dayRows),
@@ -349,7 +559,7 @@ function aggregateLongrunByEra(allDayRows) {
     if (!row.era) continue;
     if (!byEra[row.era]) byEra[row.era] = { hits: 0, total: 0, instruments: new Set() };
     byEra[row.era].instruments.add(row.instrumentId);
-    if (row.predictedDir && row.predictedDir !== 'neutral' && row.actualDir) {
+    if (isDirectionScoredRow(row)) {
       byEra[row.era].total += 1;
       if (row.hitDirection) byEra[row.era].hits += 1;
     }
@@ -485,6 +695,13 @@ function runLongrunBacktest2019({ force = false, onProgress = null, writeAllInst
 
       const allHits = instrumentResults.reduce((s, r) => s + (r.hits || 0), 0);
       const allTotal = instrumentResults.reduce((s, r) => s + (r.total || 0), 0);
+      const t3Agg = aggregateScoredHits(allFlatRows, { actualKey: 'actualDirT3', hitKey: 'hitDirectionT3' });
+      const hitsT3 = t3Agg.hits;
+      const totalT3 = t3Agg.total;
+      const gatedRows = allFlatRows.filter(
+        (r) => isDirectionScoredRow(r) && Math.abs(r.compositeScore ?? 0) >= CONFIDENCE_GATE_ABS_SCORE
+      );
+      const gatedAgg = aggregateScoredHits(gatedRows);
       const byEra = aggregateLongrunByEra(allFlatRows);
       const bySector = aggregateLongrunBySector(instrumentResults);
       const byMatrix = aggregateMatrixStats(allFlatRows);
@@ -505,6 +722,15 @@ function runLongrunBacktest2019({ force = false, onProgress = null, writeAllInst
         overallHitRate: allTotal > 0 ? +(allHits / allTotal).toFixed(4) : null,
         hits: allHits,
         total: allTotal,
+        overallHitRateT3: totalT3 > 0 ? +(hitsT3 / totalT3).toFixed(4) : null,
+        hitsT3,
+        totalT3,
+        confidenceGate: {
+          minAbsCompositeScore: CONFIDENCE_GATE_ABS_SCORE,
+          hits: gatedAgg.hits,
+          total: gatedAgg.total,
+          hitRate: gatedAgg.hitRate != null ? +gatedAgg.hitRate.toFixed(4) : null,
+        },
         dataSources: {
           klines: 'Eastmoney-futures/Sina → data/klines/commodity-{id}-day.json (+openInterest)',
           oi: 'data/history/oi/{id}.json',
@@ -518,7 +744,7 @@ function runLongrunBacktest2019({ force = false, onProgress = null, writeAllInst
             ? `${newsTagged.getRowCount()} rows from news-tagged.csv`
             : 'not loaded (run scripts/seed-news-from-events.js)',
         },
-        activeEventModel: 'sector-weighted-regime-v1.28',
+        activeEventModel: 'historical-fit+stimulus-decay-v1.31.2',
         byEra,
         bySector,
         byMatrix,
@@ -591,6 +817,23 @@ function directionFromReturn(pct) {
 function hitDirection(predicted, actual) {
   if (!predicted || !actual || predicted === 'neutral' || actual === 'neutral') return null;
   return predicted === actual;
+}
+
+/** 与 probe/L2 对齐：横盘 actual 不计入命中率分母 */
+function isDirectionScoredRow(row, { actualKey = 'actualDir' } = {}) {
+  const actual = row[actualKey];
+  return Boolean(
+    row.predictedDir &&
+      row.predictedDir !== 'neutral' &&
+      actual &&
+      actual !== 'neutral'
+  );
+}
+
+function aggregateScoredHits(rows, { actualKey = 'actualDir', hitKey = 'hitDirection' } = {}) {
+  const scored = rows.filter((r) => isDirectionScoredRow(r, { actualKey }));
+  const hits = scored.filter((r) => r[hitKey]).length;
+  return { hits, total: scored.length, hitRate: scored.length > 0 ? hits / scored.length : null };
 }
 
 function buildSyntheticQuote(bar, prevBar) {
@@ -689,13 +932,18 @@ function predictAtBarIndex(spec, bars, tIndex, sources, weights) {
     macroScores,
   });
 
+  const capitalAttention = computeCapitalAttention(technical, liveQuote, null, {
+    instrumentId: spec.id,
+    asOf: barDate,
+  });
+  const inventoryFactor = computeInventoryScore(technical, profile, spec.id, barDate);
   const factorBreakdown = buildFactorBreakdown({
     profile,
     macroScores,
     technical,
-    capitalAttention: computeCapitalAttention(technical, liveQuote, null),
+    capitalAttention,
     newsImpact,
-    inventoryScore: technical.oi?.score ?? 0,
+    inventoryScore: inventoryFactor?.score ?? 0,
     weatherScore: 0,
     volBiasParts: { volBias: 0 },
     regime: 'neutral',
@@ -759,7 +1007,7 @@ function predictAtBarIndex(spec, bars, tIndex, sources, weights) {
 }
 
 function aggregateInstrumentResults(days, window30, window60) {
-  const scored = days.filter((d) => d.predictedDir && d.predictedDir !== 'neutral' && d.actualDir);
+  const scored = days.filter((d) => isDirectionScoredRow(d));
   const hits = scored.filter((d) => d.hitDirection).length;
   const total = scored.length;
   const last30 = scored.slice(-window30);
@@ -941,4 +1189,5 @@ module.exports = {
   getBacktestProgress,
   predictAtBarIndex,
   predictAtBarIndexHistorical,
+  preloadWalkForwardCaches,
 };
