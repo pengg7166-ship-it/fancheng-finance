@@ -14,3 +14,23 @@ _check-*/
 _pkg-extract/
 # 根目录旧版入口（实际使用 src/app.js）
 /app.js
+
+# 本机探针 / agent 临时产物（勿入库）
+/_*.json
+/_*.txt
+/_*.ps1
+/_*.js
+/_ag-*/
+/_agent-*/
+/_anysearch-*/
+/_asar-*
+/_au-*
+/_auto-*
+/_backfill-*
+/_analyze-*
+/.deploy-verify/
+/2026-*.json
+
+# Cursor skill 本地密钥
+.cursor/skills/**/.env
+.cursor/skills/**/runtime.conf
