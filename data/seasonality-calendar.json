@@ -1,0 +1,41 @@
+{
+  "version": "v1.43.0-advanced",
+  "dataSource": "seasonality-calendar",
+  "windows": [
+    {
+      "symbol": "lh",
+      "label": "生猪 · 节前备货/节后回落",
+      "peakMonths": [1, 2, 9, 10, 11, 12],
+      "troughMonths": [3, 4, 5, 6],
+      "note": "春节/中秋备货抬升 · 夏季消费淡季"
+    },
+    {
+      "symbol": "p",
+      "label": "棕榈 · 产量周期",
+      "peakMonths": [3, 4, 5, 6, 7, 8],
+      "troughMonths": [11, 12, 1, 2],
+      "note": "东南亚增产季 vs 冬季消费"
+    },
+    {
+      "symbol": "cf",
+      "label": "棉花 · 收购/纺织季",
+      "peakMonths": [9, 10, 11, 12],
+      "troughMonths": [3, 4, 5, 6],
+      "note": "新棉上市/收购 · 纺织淡季"
+    },
+    {
+      "symbol": "m",
+      "label": "豆粕 · 南美供应季",
+      "peakMonths": [3, 4, 5, 6],
+      "troughMonths": [9, 10, 11],
+      "note": "南美到港高峰 · 北美上市前"
+    },
+    {
+      "symbol": "y",
+      "label": "豆油 · 消费/备货",
+      "peakMonths": [9, 10, 11, 12, 1],
+      "troughMonths": [4, 5, 6],
+      "note": "双节备货 · 夏季消费偏淡"
+    }
+  ]
+}

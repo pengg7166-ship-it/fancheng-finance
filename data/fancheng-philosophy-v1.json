@@ -1,0 +1,71 @@
+{
+  "version": "v1",
+  "manifestVersion": "1.35.9",
+  "updatedAt": "2026-06-29",
+  "epigraph": "在一个变化的世界里，结论只是一时的，并不是恒定不变的，变才是世界的主要部分",
+  "principles": [
+    {
+      "id": "change_first",
+      "title": "变化优先",
+      "short": "变才是主部",
+      "summary": "结论具时效性；系统随新数据、新时段、新事件持续校正，不作恒定断言。",
+      "keywords": ["变化", "校正", "时效", "复盘"]
+    },
+    {
+      "id": "outlook_anchor",
+      "title": "研判为纲",
+      "short": "大宗走势研判",
+      "summary": "供需×金融环境、主矛盾分级、政策与跨境传导——理论基线定方向，其余模块围绕它展开。",
+      "keywords": ["研判", "主矛盾", "供需", "金融环境"]
+    },
+    {
+      "id": "chan_method",
+      "title": "缠论为术",
+      "short": "多周期 K 线",
+      "summary": "缠论结构 + 5m/15m/1h 支撑阻力，在研判方向确立后寻找入场印证，不另起一套 alpha。",
+      "keywords": ["缠论", "多周期", "支撑", "阻力", "入场"]
+    },
+    {
+      "id": "slot_correction",
+      "title": "时段校正",
+      "short": "三槽预测",
+      "summary": "每日 20:55 / 08:55 / 13:25 固定快照，夜盘前、日盘前、午盘前持续校正同一 session 的判断。",
+      "keywords": ["20:55", "08:55", "13:25", "快照"]
+    },
+    {
+      "id": "empirical_check",
+      "title": "实证对照",
+      "short": "预测 vs 实际",
+      "summary": "存档、三时段对照、方向/区间校验与复盘——用实际走势检验并修正下一版结论。",
+      "keywords": ["复盘", "校验", "存档", "命中"]
+    },
+    {
+      "id": "gate_humility",
+      "title": "审慎 gate",
+      "short": "Phil 过滤",
+      "summary": "当价格走势、跨境 lead、政策叙事或利好兑现与哲学方向冲突时，宁可观望也不硬做。",
+      "keywords": ["Phil", "filterPass", "priced_in", "发散"]
+    }
+  ],
+  "strategyStack": [
+    { "layer": "变量层", "name": "大宗走势研判", "role": "理论基线 · 方向与区间" },
+    { "layer": "变量层", "name": "哲学 filter", "role": "政策/事件/叙事 · Phil✓ / Phil·过滤" },
+    { "layer": "常量层", "name": "缠论 S/R", "role": "多周期 touch 入场 · 止损纪律" },
+    { "layer": "常量层", "name": "Quant gate", "role": "方向注入 · 信号从属于研判" }
+  ],
+  "predictionSlots": [
+    { "id": "pre-night", "label": "20:55夜盘前", "shortLabel": "20:55", "description": "日盘收盘后、夜盘开盘前基准预测" },
+    { "id": "pre-day", "label": "08:55日盘前", "shortLabel": "08:55", "description": "夜盘结束后、日盘开盘前预测" },
+    { "id": "pre-afternoon", "label": "13:25午盘前", "shortLabel": "13:25", "description": "日盘午间、夜盘重启前预测" }
+  ],
+  "envFlags": {
+    "PHILOSOPHY_FILTER_V2": {
+      "default": "1",
+      "description": "哲学方向 filter v2：政策日/事件日/仓单权重/priced-in 合成；生产默认开启"
+    },
+    "QUANT_MODE": {
+      "default": "fundamental_chan",
+      "description": "量化模式：研判方向为主 + 缠论 S/R 入场"
+    }
+  }
+}

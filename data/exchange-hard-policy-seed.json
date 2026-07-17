@@ -1,0 +1,26 @@
+{
+  "version": "v1.43.0-advanced",
+  "dataSource": "exchange-hard-policy-seed",
+  "events": [
+    {
+      "id": "HARD-I-MARGIN-2024",
+      "symbol": "i",
+      "type": "margin_hike",
+      "title": "铁矿石保证金上调（示例种子）",
+      "effectiveDate": "2024-03-15",
+      "weight": "hard",
+      "note": "交易所硬性政策 · 权重高于口头调控",
+      "linkedSymbols": ["i", "rb", "jm", "j", "hc"]
+    },
+    {
+      "id": "HARD-RB-LIMIT-2024",
+      "symbol": "rb",
+      "type": "position_limit",
+      "title": "螺纹钢限仓（示例种子）",
+      "effectiveDate": "2024-06-01",
+      "weight": "hard",
+      "note": "限仓/保证金类硬性约束",
+      "linkedSymbols": ["rb", "hc"]
+    }
+  ]
+}

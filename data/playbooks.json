@@ -1,0 +1,155 @@
+{
+  "version": "v1.45.0-opponent-playbooks",
+  "playbooks": [
+    {
+      "id": "PB-I-2023",
+      "symbol": "i",
+      "title": "铁矿石 · 政策偏空价格无视",
+      "regime": "B",
+      "narrativeZh": "政策意图偏空但价格/phase 仍偏强 → 信任 phase/资本而非单一政策 headline",
+      "policyIntent": "bearish",
+      "priceTrust": "phase-capital",
+      "stages": {
+        "T1": "政策信号初现 · 价格未反应",
+        "T2": "政策加码 · 价格短暂承压",
+        "T3": "phase/资本背离政策 · 关键观察窗",
+        "T4": "证伪或退潮 · 政策与价格收敛"
+      },
+      "divergenceTemplate": "D2",
+      "falsifyHints": ["库存拐点确认", "phase 退潮", "资本关注骤降"],
+      "dataSource": "playbooks.json",
+      "sampleN": 1,
+      "sampleWarning": "low-sample-seed"
+    },
+    {
+      "id": "PB-LH-2024",
+      "symbol": "lh",
+      "title": "生猪 · 去产能踩踏",
+      "regime": "B",
+      "narrativeZh": "去产能/政策预期引发短期供应 surge → 价格 crash；近端供给冲击优先于远端叙事",
+      "policyIntent": "bearish-supply-surge",
+      "priceTrust": "near-term-supply",
+      "stages": {
+        "T1": "政策/预期去产能",
+        "T2": "出栏加速 · 价格急跌",
+        "T3": "踩踏尾声 · 观察产能去化数据",
+        "T4": "供需再平衡"
+      },
+      "divergenceTemplate": "D1",
+      "falsifyHints": ["能繁母猪存栏拐点", "现货价企稳"],
+      "dataSource": "playbooks.json",
+      "sampleN": 1,
+      "sampleWarning": "low-sample-seed"
+    },
+    {
+      "id": "PB-FG-2024",
+      "symbol": "fg",
+      "title": "玻璃 · 供给改革 spike 后需求锚定",
+      "regime": "B",
+      "narrativeZh": "供给端改革推升后，地产/竣工需求锚定 crash；冷修 alone 不足以支撑",
+      "policyIntent": "mixed-supply-then-demand",
+      "priceTrust": "demand-anchor",
+      "stages": {
+        "T1": "供给改革/限产 narrative",
+        "T2": "价格 spike · 利润修复",
+        "T3": "需求（地产）证伪 · 库存累积",
+        "T4": "冷修/出清不足以单独反转"
+      },
+      "divergenceTemplate": "D2",
+      "falsifyHints": ["竣工/玻璃深加工订单", "库存去化"],
+      "dataSource": "playbooks.json",
+      "sampleN": 1,
+      "sampleWarning": "low-sample-seed"
+    },
+    {
+      "id": "PB-BLACK-2015",
+      "symbol": "i",
+      "linkedSymbols": ["i", "rb", "jm", "j", "hc"],
+      "title": "黑色系 · 2015供给侧改革+棚改正循环",
+      "regime": "B",
+      "narrativeZh": "2015-11 中央首提供给侧改革；2016-02 钢铁/煤炭去产能文件落地；棚改货币化(PSL)拉动三四线库存去化。非即时 spike — 涨价→去库存→库存低位→价更坚→正循环→2015-12至2018 螺纹累计涨近3000元/吨(峰值~4400)。2016-2018 压减粗钢1.45亿吨、取缔地条钢1.4亿吨；PPI从-5.9%回升至7.8%；吨钢利润数百至千元。2018-11 环保限产不及预期+宏观走弱后回调。",
+      "policyIntent": "bullish-supply-reform",
+      "priceTrust": "destock-loop",
+      "longLag": true,
+      "stages": {
+        "T1": "政策信号(2015-11~2016-01) · 长 lag · 价格未动",
+        "T2": "价格初涨(2016-02+) · 黑色系领涨",
+        "T3": "去库存确认 · 库存同比低位",
+        "T4": "正反馈循环 · 供给弹性低+利润飙升",
+        "T5": "力竭(2018-11+) · 环保不及预期/宏观回调"
+      },
+      "divergenceTemplate": "D0",
+      "falsifyHints": ["社会库存拐点累库", "棚改/基建证伪", "产能置换释放", "吨钢利润长期负值"],
+      "historicalFacts": [
+        "2015-11 中央财经领导小组首提供给侧改革",
+        "2016-02-04 国务院钢铁去产能意见 · 5年压减1-1.5亿吨",
+        "2016-02-05 煤炭去产能意见 · 退出5亿吨",
+        "2015-12 中央经济工作会议定调2016主线",
+        "螺纹钢2015-12见底 · 2018峰值~4400 · 累计涨近3000",
+        "2016-2018 行业PPI加权从-10.5%升至21.5% · 螺纹/动力煤+112%/+85%"
+      ],
+      "dataSource": "playbooks.json+web-research",
+      "sampleN": 1,
+      "sampleWarning": "historical-seed-low-n"
+    },
+    {
+      "id": "PB-OPP-001",
+      "universal": true,
+      "title": "对手盘未竭 (Capitulation Gate)",
+      "regime": "universal",
+      "narrativeZh": "空头不死多头不止 / 多头不死空头不止 — OI+价格+phase 判定对手盘是否已竭；勿仅因价高减多（空头未死）或价低减空（多头未死）；已竭则减仓/不追。铁矿 D2 政策背离时信任 phase/资本。OI 缺失 → 待校验。",
+      "policyIntent": "opponent-oi-phase",
+      "priceTrust": "oi+phase",
+      "stages": {
+        "T1": "对手盘未死 · 趋势延续",
+        "T2": "对手盘已竭 · 减仓/不追"
+      },
+      "divergenceTemplate": "D0-D3",
+      "falsifyHints": ["OI 反转", "phase 退潮确认", "持仓崩塌"],
+      "dataSource": "opponent-capitulation",
+      "sampleN": 1,
+      "sampleWarning": "low-sample-seed"
+    },
+    {
+      "id": "PB-SQUEEZE",
+      "universal": true,
+      "title": "挤仓剧本",
+      "regime": "universal",
+      "narrativeZh": "近月OI集中→价格疯狂→交易所提保/限仓→OI崩塌→回归。T2+ 持有者减仓、关闭新 scout（滑点严重）；止损可能无法按价位执行。",
+      "policyIntent": "squeeze-liquidity",
+      "priceTrust": "oi-concentration+slippage",
+      "stages": {
+        "T1": "近月OI集中 · 价涨持仓增",
+        "T2": "价格疯狂+滑点 · W2 · 持有者减仓 · 禁新 scout",
+        "T3": "交易所硬性政策 · 提保/限仓",
+        "T4": "OI崩塌 · 挤仓尾声",
+        "T5": "退潮回归 · 价格均值回复"
+      },
+      "divergenceTemplate": "—",
+      "falsifyHints": ["OI 持续增仓", "滑点缓解", "交易所政策撤回"],
+      "dataSource": "policy-playbook-engine+slippage-detector+exchange-hard-policy",
+      "sampleN": 1,
+      "sampleWarning": "low-sample-seed"
+    },
+    {
+      "id": "PB-LIQ-CRISIS",
+      "universal": true,
+      "title": "流动性危机 (L3)",
+      "regime": "universal",
+      "narrativeZh": "全球流动性 L3 系统性冲击 — 覆盖 PB-OPP-001；组合有效独立押注 ≤1；全 pilot posture 上限禁止/观望。",
+      "policyIntent": "global-L3-shock",
+      "priceTrust": "liquidity-regime",
+      "stages": {
+        "T1": "L3 触发 · 流动性冲击",
+        "T2": "系统性 shock regime",
+        "T3": "VIX/信用警戒",
+        "T4": "去杠杆 · 全市场流动性枯竭"
+      },
+      "divergenceTemplate": "—",
+      "falsifyHints": ["VIX 回落", "tier 降至 L2 以下", "信用压力缓解"],
+      "dataSource": "global-liquidity-risk",
+      "sampleN": 1,
+      "sampleWarning": "low-sample-seed"
+    }
+  ]
+}
