@@ -8,7 +8,7 @@ const outlookHistory = require('./commodity-outlook-history');
 const outlookCalibration = require('./commodity-outlook-calibration');
 const { normalizeCommodityId } = require('./policy-commodity-map');
 const { getCommodityMeta, getAllCommodities } = require('./commodities-catalog');
-const { getNewsKeywords, scoreNewsItem, getGlobalNewsPoolSync } = require('./commodities-news');
+const { getNewsKeywords, scoreNewsItem, getGlobalNewsPoolSync, hasDirectSymbolMention, isUsRegulatoryNewsItem } = require('./commodities-news');
 const {
   getInstrumentProfile,
   getSectorVolPrior,
@@ -23,12 +23,17 @@ const {
 } = require('./commodity-technical-analyzer');
 const philosophy = require('./commodity-outlook-philosophy');
 const eventCalendar = require('./commodity-outlook-event-calendar');
+/** v1.49: 用户策略不再使用次日价格区间预测 */
+const ENABLE_RANGE_PREDICTION = false;
+const { classifyL1RegimeFromBars, evaluateRegimeGate } = require('./regime-gate');
+const { evaluateTradableDay, resolveCalendarStaleness } = require('./tradable-day-kpi');
+const { blendL2LiveDirection, applyL2BlendedDirection } = require('./outlook-l2-live-blend');
 
 const OUTLOOK_DISK_KEY = 'commodity-outlook-v4.json';
-const OUTLOOK_DISK_TTL_MS = 60 * 1000;
+const OUTLOOK_DISK_TTL_MS = 45 * 1000;
 const OUTLOOK_RECOMPUTE_DEBOUNCE_MS = 800;
 const PRICE_OI_CHANGE_THRESHOLD_PCT = 0.15;
-const OUTLOOK_ENGINE_VERSION = 'v1.27.0';
+const OUTLOOK_ENGINE_VERSION = 'v1.48.0-integrated-hydrate';
 
 /** 市场研判环境（条件权重，非固定） */
 const REGIME_IDS = ['riskOn', 'riskOff', 'liquidityPanic', 'supplyShock', 'weatherShock', 'neutral'];
@@ -275,6 +280,7 @@ function countOutlookDataSources(sources = {}) {
     sources.fed?.indicators?.length,
     sources.boj?.indicators?.length,
     sources.commodities?.exchanges?.some((e) => e.items?.length),
+    sources.fundamentals?.indicators?.length,
   ].filter(Boolean).length;
 }
 
@@ -288,7 +294,7 @@ function applyNewsPriceConfirmation(newsImpact, changePct) {
     ...newsImpact,
     shock: +(newsImpact.shock * 0.4).toFixed(3),
     score: +(newsImpact.score * 0.4).toFixed(4),
-    shockDisplay: `${newsImpact.shock * 0.4 >= 0 ? '+' : ''}${(newsImpact.shock * 0.4).toFixed(2)}`,
+    shockDisplay: `${newsImpact.shock * 0.4 >= 0 ? '+' : '-'}${(newsImpact.shock * 0.4).toFixed(2)}`,
     summary: `${newsImpact.summary || ''} · 现价背离×0.4`.trim(),
     priceDampened: true,
   };
@@ -771,48 +777,433 @@ function itemRelevantToInstrument(item, meta, keywords) {
   return false;
 }
 
-function computeCapitalAttention(technical, liveQuote, sectorVolumeRank = null) {
-  const vol5 = technical.volume?.ratio ?? 1;
-  const vol20 = technical.volume?.ratio20 ?? vol5;
-  const oiDelta = technical.oi?.deltaPct;
-  const price = Number(liveQuote?.price) || Number(technical.price) || 0;
-  const volume = Number(liveQuote?.volume) || technical.volume?.todayVolume || 0;
-  const turnover = price > 0 && volume > 0 ? price * volume : 0;
-  const rangePct = technical.intraday?.rangePct ?? 0;
-
-  const volScore = clamp((vol5 - 0.75) * 22 + (vol20 - 0.75) * 14, 0, 32);
-  const oiScore =
-    oiDelta != null ? clamp(Math.abs(oiDelta) * 3.5 + (Math.abs(oiDelta) >= 2 ? 6 : 0), 0, 26) : oiDelta === null && technical.oi?.current ? 12 : 6;
-  const turnScore = turnover > 0 ? clamp(Math.log10(turnover + 1) * 2.8 - 4, 0, 22) : 4;
-  const rangeScore = clamp(rangePct * 3.5, 0, 14);
-  const rankScore = sectorVolumeRank != null ? clamp((1 - sectorVolumeRank) * 12, 0, 12) : 6;
-
-  const raw = volScore + oiScore + turnScore + rangeScore + rankScore;
-  const score = clamp(Math.round(raw), 0, 100);
-  const contribution = clamp((score - 50) / 220, -0.28, 0.35);
-
-  return {
-    score,
-    display: `${score}/100`,
-    contribution: +contribution.toFixed(4),
-    subMetrics: {
-      volumeRatio5d: vol5 != null ? +vol5.toFixed(2) : null,
-      volumeRatio20d: vol20 != null ? +vol20.toFixed(2) : null,
-      oiChangePct: oiDelta != null ? +oiDelta.toFixed(2) : null,
-      turnoverProxy: turnover > 0 ? Math.round(turnover) : null,
-      intradayRangePct: rangePct != null ? +rangePct.toFixed(2) : null,
-      sectorVolumeRank: sectorVolumeRank != null ? +sectorVolumeRank.toFixed(2) : null,
-    },
-  };
+function computeCapitalAttention(technical, liveQuote, sectorVolumeRank = null, extras = {}) {
+  try {
+    const { computeCapitalAttitude } = require('./capital-attitude');
+    const row = computeCapitalAttitude({
+      instrumentId: extras.instrumentId || extras.id || null,
+      asOf: extras.asOf || extras.barDate || null,
+      technical,
+      liveQuote,
+      sectorVolumeRank,
+    });
+    if (!row?.available || row.score == null) {
+      // Keep honest 暂无 attitude + horizon slots (incl. trading-oi-stale cold contracts).
+      // Must not drop attitudeLabel/horizons or live cache coverage collapses to score-only.
+      return {
+        score: null,
+        display: row?.display || '暂无',
+        contribution: 0,
+        label: row?.label || '暂无',
+        available: false,
+        attitude: row?.attitude ?? null,
+        attitudeLabel: row?.attitudeLabel || '暂无',
+        attitudeNote: row?.attitudeNote || row?.note || null,
+        jointWithInventory: row?.jointWithInventory || null,
+        stockFlowBias: row?.stockFlowBias || null,
+        jointSignal: row?.jointSignal || null,
+        horizons: row?.horizons || { oi1wPct: null, oi1mPct: null, oi3mPct: null },
+        member: row?.member || null,
+        oiAsOf: row?.oiAsOf || null,
+        asOf: row?.asOf || null,
+        reason: row?.reason || 'missing',
+        dataSource: row?.dataSource || 'missing',
+        method: row?.method || 'capital-attitude',
+        note: row?.note || null,
+        version: row?.version || null,
+        subMetrics: row?.subMetrics || {
+          oi1wPct: null,
+          oi1mPct: null,
+          oi3mPct: null,
+        },
+      };
+    }
+    return {
+      score: row.score,
+      display: row.display,
+      contribution: row.contribution,
+      label: row.label,
+      tier: row.tier,
+      available: true,
+      attitude: row.attitude,
+      attitudeLabel: row.attitudeLabel,
+      attitudeNote: row.attitudeNote,
+      jointWithInventory: row.jointWithInventory,
+      stockFlowBias: row.stockFlowBias,
+      jointSignal: row.jointSignal || null,
+      horizons: row.horizons,
+      member: row.member,
+      oiAsOf: row.oiAsOf,
+      asOf: row.asOf,
+      dataSource: row.dataSource,
+      method: row.method,
+      note: row.note,
+      version: row.version,
+      subMetrics: row.subMetrics,
+      parts: row.parts,
+    };
+  } catch (err) {
+    return {
+      score: null,
+      display: '暂无',
+      contribution: 0,
+      available: false,
+      reason: err.message,
+      dataSource: 'capital-attitude-error',
+      method: 'capital-attitude',
+      subMetrics: {},
+    };
+  }
 }
 
-function computeInventoryScore(technical, profile) {
+/** Old caches only stored score/display — UI needs attitude + multi-horizon OI. */
+function capitalAttentionNeedsHydrate(cap) {
+  if (!cap) return true;
+  if (String(cap.version || '').includes('capital-attitude') === false && cap.attitudeLabel == null) {
+    return true;
+  }
+  // Refresh when OI as-of lagged (e.g. post commodity_oi heal).
+  if (cap.oiAsOf) {
+    const lagDays = (Date.now() - Date.parse(String(cap.oiAsOf).slice(0, 10))) / 86400000;
+    if (Number.isFinite(lagDays) && lagDays > 5) return true;
+  } else if (cap.attitudeLabel) {
+    // Has attitude but no oiAsOf stamp — recompute once to attach freshness metadata.
+    return true;
+  }
+  if (cap.attitudeLabel != null) return false;
+  if (cap.horizons && (cap.horizons.oi1wPct != null || cap.horizons.oi1mPct != null || cap.horizons.oi3mPct != null)) {
+    return false;
+  }
+  return !String(cap.version || '').includes('capital-attitude');
+}
+
+function applyCapitalAttentionRanks(instruments) {
+  try {
+    const { rankCapitalAttention } = require('./capital-attitude');
+    const ranked = rankCapitalAttention(
+      instruments.map((inst) => ({
+        id: inst.id,
+        score: inst.capitalAttention?.score,
+        attitudeLabel: inst.capitalAttention?.attitudeLabel,
+      }))
+    );
+    const byId = new Map(ranked.map((r) => [r.id, r]));
+    for (const inst of instruments) {
+      const r = byId.get(inst.id);
+      if (!inst.capitalAttention) continue;
+      if (r) {
+        inst.capitalAttention.rank = r.rank;
+        inst.capitalAttention.rankOf = r.rankOf;
+        inst.capitalAttention.percentile = r.percentile;
+        inst.capitalAttentionDisplay = `${inst.capitalAttention.display}${
+          inst.capitalAttention.attitudeLabel ? ` · ${inst.capitalAttention.attitudeLabel}` : ''
+        } · 关注度第${r.rank}/${r.rankOf}`;
+      } else if (inst.capitalAttention.attitudeLabel) {
+        inst.capitalAttentionDisplay = `${inst.capitalAttention.display || '暂无'} · ${inst.capitalAttention.attitudeLabel}`;
+      }
+    }
+  } catch {
+    // optional ranking
+  }
+}
+
+/**
+ * Heal stale outlook packs so badge/detail show 资金态度 without waiting for a full recompute.
+ * Runs once when attitude fields are missing; persists back to disk.
+ */
+function hydrateCapitalAttitudeOnOutlook(outlook, { persist = true } = {}) {
+  if (!outlook?.instruments?.length) return outlook;
+  if (!outlook.instruments.some((inst) => capitalAttentionNeedsHydrate(inst.capitalAttention))) {
+    return outlook;
+  }
+  const instruments = outlook.instruments.map((inst) => {
+    if (!capitalAttentionNeedsHydrate(inst.capitalAttention)) return inst;
+    const tech = inst.factors?.technical || {};
+    const refreshed = computeCapitalAttention(
+      tech,
+      { price: inst.price, changePct: inst.changePct },
+      inst.capitalAttention?.subMetrics?.sectorVolumeRank ?? null,
+      { instrumentId: inst.id }
+    );
+    return {
+      ...inst,
+      capitalAttention: refreshed,
+      capitalAttentionDisplay: refreshed.display,
+      factors: {
+        ...(inst.factors || {}),
+        capitalAttention: refreshed,
+      },
+    };
+  });
+  applyCapitalAttentionRanks(instruments);
+  const next = {
+    ...outlook,
+    instruments,
+    capitalAttitudeHydratedAt: new Date().toISOString(),
+  };
+  if (persist) {
+    try {
+      diskCache.write(OUTLOOK_DISK_KEY, { data: next, savedAt: Date.now() });
+    } catch (err) {
+      console.warn('[commodity-outlook-engine] capital attitude hydrate persist:', err?.message || err);
+    }
+  }
+  return next;
+}
+
+/**
+ * 旧缓存缺少 intelCenter / intelCenterPack 时，内存补算并可选落盘。
+ * 不造假：仅从现有仪器字段派生命题与门禁。
+ */
+function hydrateIntelCenterOnOutlook(outlook, { persist = true, force = false } = {}) {
+  if (!outlook?.instruments?.length) return outlook;
+  const needs =
+    force ||
+    !outlook.intelCenterPack?.version ||
+    !String(outlook.intelCenterPack.version).includes('intel-center') ||
+    !outlook.instruments.some((i) => i.intelCenter?.primaryClaim?.claimId);
+  if (!needs) return outlook;
+
+  try {
+    const intelOrch = require('./intel-orchestrator');
+    const asOf = new Date().toISOString().slice(0, 10);
+    const instruments = intelOrch.applyIntelCenterToInstruments(outlook.instruments, {
+      asOf,
+      globalRegime: outlook.globalRegime,
+      persist: true,
+    });
+    const intelCenterPack = intelOrch.buildIntelCenterPack(instruments, {
+      asOf,
+      globalRegime: outlook.globalRegime,
+      persist: false,
+    });
+    const next = {
+      ...outlook,
+      instruments,
+      intelCenterPack,
+      intelCenterHydratedAt: new Date().toISOString(),
+      framework: {
+        ...(outlook.framework || {}),
+        intelCenterVersion: intelCenterPack?.version || null,
+        intelCenterModel: 'chief-of-staff-pipeline',
+      },
+    };
+    if (persist) {
+      try {
+        const { stripIntelPackForDisk } = require('./intel-orchestrator');
+        diskCache.write(OUTLOOK_DISK_KEY, {
+          data: {
+            ...next,
+            intelCenterPack: stripIntelPackForDisk(intelCenterPack),
+          },
+          savedAt: Date.now(),
+        });
+      } catch (err) {
+        console.warn('[commodity-outlook-engine] intel center hydrate persist:', err?.message || err);
+      }
+    }
+    return next;
+  } catch (err) {
+    console.warn('[commodity-outlook-engine] intel center hydrate:', err?.message || err);
+    return outlook;
+  }
+}
+
+function computeInventoryScore(technical, profile, instrumentId = null, barDate = null) {
   const oi = technical.oi;
-  if (!oi) return 0;
   let score = 0;
-  if (oi.deltaPct != null) score += clamp(oi.deltaPct / 12, -0.5, 0.5);
-  if (technical.volume?.ratio != null) score += clamp((technical.volume.ratio - 1) * 0.15, -0.2, 0.2);
-  return clamp(score * (profile.macroSensitivity?.inventory ?? 0.5), -0.4, 0.4);
+  const parts = [];
+
+  if (oi?.deltaPct != null) {
+    score += clamp(oi.deltaPct / 12, -0.5, 0.5);
+    parts.push({ source: 'oi_delta', value: oi.deltaPct });
+  }
+  if (technical.volume?.ratio != null) {
+    score += clamp((technical.volume.ratio - 1) * 0.15, -0.2, 0.2);
+  }
+
+  let warehouse = null;
+  let lme = null;
+  let visibleInventory = null;
+  const d = barDate || new Date().toISOString().slice(0, 10);
+  const sym = instrumentId ? String(instrumentId).toLowerCase() : null;
+
+  if (sym) {
+    try {
+      const whMod = require('./shfe-warehouse-fetcher');
+      warehouse = whMod.getWarehouseReceiptAtDate(sym, d);
+      if (!warehouse?.warehouseReceipt) {
+        const rows = whMod.loadWarehouseRows(sym);
+        if (rows?.length) {
+          const last = rows[rows.length - 1];
+          warehouse = {
+            date: String(last.date || '').slice(0, 10),
+            instrumentId: sym,
+            warehouseReceipt: last.warehouse_receipt != null ? Number(last.warehouse_receipt) : null,
+            changeDod: last.change_dod != null ? Number(last.change_dod) : null,
+            source: last.source || 'shfe-official',
+            exchange: last.exchange || (String(last.source || '').includes('dce') ? 'DCE' : 'SHFE'),
+          };
+        }
+      }
+      if (warehouse?.changeDod != null && warehouse.warehouseReceipt != null) {
+        const prior = Number(warehouse.warehouseReceipt) - Number(warehouse.changeDod);
+        const chgPct = (Number(warehouse.changeDod) / Math.max(Math.abs(prior), 1)) * 100;
+        score += clamp(-chgPct / 8, -0.35, 0.35);
+        parts.push({ source: 'warehouse_dod', changeDod: warehouse.changeDod, chgPct: +chgPct.toFixed(3) });
+      }
+      try {
+        const chg5d = whMod.getWarehouseReceiptChg5dAtDate?.(sym, warehouse?.date || d);
+        if (chg5d != null && Number.isFinite(chg5d)) {
+          score += clamp(-chg5d / 12, -0.3, 0.3);
+          parts.push({ source: 'warehouse_chg5d', chg5dPct: chg5d });
+          if (warehouse) warehouse.chg5dPct = chg5d;
+        }
+      } catch {
+        // optional
+      }
+    } catch {
+      // optional lane
+    }
+    try {
+      const sector = require('./sector-fundamentals-loader');
+      const visible = sector.getVisibleInventoryAtDate?.(sym, d);
+      if (visible) {
+        visibleInventory = visible;
+        if (visible.available && visible.changeWow != null && visible.level != null) {
+          const prior = Number(visible.level) - Number(visible.changeWow);
+          const wowPct = (Number(visible.changeWow) / Math.max(Math.abs(prior), 1)) * 100;
+          score += clamp(-wowPct / 10, -0.25, 0.25);
+          parts.push({
+            source: 'visible_inventory_wow',
+            metric: visible.metric,
+            changeWow: visible.changeWow,
+            wowPct: +wowPct.toFixed(3),
+          });
+        }
+      }
+    } catch {
+      // optional
+    }
+    try {
+      const lmeMod = require('./lme-inventory-fetcher');
+      if (lmeMod.metalForInstrument(sym)) {
+        lme = lmeMod.getInventoryAtDate(sym, d);
+        if (lme?.changeWow != null && lme.inventoryTonnes != null) {
+          const prior = Number(lme.inventoryTonnes) - Number(lme.changeWow);
+          const wowPct = (Number(lme.changeWow) / Math.max(Math.abs(prior), 1)) * 100;
+          score += clamp(-wowPct / 10, -0.3, 0.3);
+          parts.push({ source: 'lme_wow', changeWow: lme.changeWow, wowPct: +wowPct.toFixed(3) });
+        }
+      }
+    } catch {
+      // optional lane
+    }
+  }
+
+  // 仓单单独分量：无合证时压低；有合证时由 joint 接管方向
+  let soloWh = 0;
+  const whParts = parts.filter((p) => p.source === 'warehouse_dod' || p.source === 'warehouse_chg5d');
+  for (const p of whParts) {
+    if (p.source === 'warehouse_dod' && p.chgPct != null) soloWh += clamp(-p.chgPct / 8, -0.35, 0.35);
+    if (p.source === 'warehouse_chg5d' && p.chg5dPct != null) soloWh += clamp(-p.chg5dPct / 12, -0.3, 0.3);
+  }
+  // 从总分中剥离原始仓单贡献，再按合证规则重加权（避免双重计算）
+  let scoreSansSoloWh = score - soloWh;
+
+  let jointSignal = null;
+  let joint = null;
+  if (sym) {
+    try {
+      joint = require('./inventory-capital-joint').buildStockFlowJoint(sym, d);
+      const { jointDecisionDelta, dampenSoloWarehouse } = require('./stock-flow-joint-signal');
+      jointSignal = jointDecisionDelta(joint, {
+        profileInventorySens: profile.macroSensitivity?.inventory ?? 0.7,
+      });
+      const dampWh = dampenSoloWarehouse(soloWh, jointSignal);
+      scoreSansSoloWh += dampWh;
+      parts.push({
+        source: 'warehouse_solo_dampened',
+        rawSolo: +soloWh.toFixed(4),
+        dampened: +dampWh.toFixed(4),
+      });
+      if (jointSignal?.reason === 'joint_applied' && jointSignal.delta != null) {
+        scoreSansSoloWh += jointSignal.delta;
+        parts.push({
+          source: 'stock_flow_joint',
+          delta: jointSignal.delta,
+          regime: jointSignal.regime,
+          coherence: jointSignal.coherence,
+          reason: jointSignal.reason,
+          version: jointSignal.version,
+        });
+      } else if (jointSignal) {
+        parts.push({
+          source: 'stock_flow_joint',
+          delta: jointSignal.delta,
+          reason: jointSignal.reason,
+          regime: jointSignal.regime,
+          version: jointSignal.version,
+        });
+      }
+    } catch {
+      // optional — keep inventory without joint
+      scoreSansSoloWh += clamp(soloWh * 0.35, -0.08, 0.08);
+    }
+  } else {
+    scoreSansSoloWh += clamp(soloWh * 0.35, -0.08, 0.08);
+  }
+
+  const finalScore = clamp(scoreSansSoloWh * (profile.macroSensitivity?.inventory ?? 0.5), -0.45, 0.45);
+  const hasPhysical = Boolean(warehouse || lme || visibleInventory?.available);
+  return {
+    score: finalScore,
+    warehouse: warehouse
+      ? {
+          date: warehouse.date,
+          level: warehouse.warehouseReceipt,
+          changeDod: warehouse.changeDod,
+          chg5dPct: warehouse.chg5dPct ?? null,
+          exchange: warehouse.exchange || 'SHFE',
+          source: warehouse.source || null,
+        }
+      : null,
+    visibleInventory: visibleInventory || null,
+    lme: lme
+      ? {
+          weekEnding: lme.weekEnding,
+          metal: lme.metal,
+          levelTonnes: lme.inventoryTonnes,
+          changeWow: lme.changeWow,
+        }
+      : null,
+    oi: oi ? { deltaPct: oi.deltaPct } : null,
+    stockFlowJoint: joint?.available
+      ? {
+          available: true,
+          structureBias: joint.structureBias,
+          primaryRegime: joint.primaryRegime,
+          primaryLabel: joint.primaryLabel,
+          coherence: joint.coherence,
+          supportsLong: joint.supportsLong,
+          supportsShort: joint.supportsShort,
+          priceMayLag: joint.priceMayLag,
+          dataSource: joint.dataSource,
+          method: joint.method,
+        }
+      : joint
+        ? { available: false, reason: joint.reason || 'insufficient' }
+        : null,
+    jointSignal,
+    parts,
+    dataSource: hasPhysical
+      ? jointSignal?.reason === 'joint_applied'
+        ? 'warehouse+visible+lme+oi+stock-flow-joint'
+        : 'warehouse+visible+lme+oi'
+      : oi?.deltaPct != null
+        ? 'oi_proxy'
+        : 'missing',
+  };
 }
 
 function computeWeatherScore(climateScore, profile) {
@@ -849,15 +1240,16 @@ function scoreNewsImpactForInstrument(meta, profile, sources, newsPools = []) {
   ];
 
   for (const item of intelPools.slice(0, 140)) {
-    const text = `${item.title || ''} ${item.summary || ''}`.toLowerCase();
+    const text = `${item.title || ''} ${item.summary || ''} ${item.titleEn || ''}`;
+    const directMention = hasDirectSymbolMention(text, meta, keywords);
     const tagHit = item.commodities?.some((c) => normalizeCommodityId(c.id) === normalizeCommodityId(meta.id));
-    const kwHit = keywords.some((kw) => {
-      const k = String(kw).toLowerCase().trim();
-      return k.length >= 2 && text.includes(k);
-    });
     const matchScore = scoreNewsItem(item, keywords, meta);
-    const relevance = tagHit ? 1 : kwHit ? Math.min(0.35 + matchScore / 25, 1) : matchScore >= 5 ? matchScore / 20 : 0;
-    if (relevance < 0.2) continue;
+    if (isUsRegulatoryNewsItem(item) && !directMention && matchScore < 10) continue;
+    let relevance = 0;
+    if (directMention) relevance = Math.min(0.5 + matchScore / 20, 1);
+    else if (tagHit) relevance = Math.min(0.32 + matchScore / 26, 0.7);
+    else relevance = matchScore >= 6 ? matchScore / 22 : 0;
+    if (relevance < 0.28) continue;
 
     hitCount += 1;
     const bucket = item._newsBucket || classifyNewsBucket(item, sources);
@@ -889,12 +1281,12 @@ function scoreNewsImpactForInstrument(meta, profile, sources, newsPools = []) {
 
   let summary;
   if (hitCount === 0) summary = '资讯中性（0条命中）';
-  else summary = `资讯冲击 ${shock >= 0 ? '+' : ''}${shock.toFixed(2)}（${hitCount}条命中）`;
+  else summary = `资讯冲击 ${shock >= 0 ? '+' : '-'}${shock.toFixed(2)}（${hitCount}条命中）`;
 
   return {
     score,
     shock,
-    shockDisplay: `${shock >= 0 ? '+' : ''}${shock.toFixed(2)}`,
+    shockDisplay: `${shock >= 0 ? '+' : '-'}${shock.toFixed(2)}`,
     confidence: clampStars(hitCount > 0 ? 2 + Math.min(weight, 3) : 1.5),
     summary,
     weight,
@@ -1032,7 +1424,7 @@ function buildRationaleFromBreakdown(meta, breakdown, capitalAttention, newsImpa
 
   const driverParts = entries.map(([k, v]) => {
     const label = FACTOR_BREAKDOWN_LABELS[k] || k;
-    return `${label}${v >= 0 ? '+' : ''}${v.toFixed(2)}`;
+    return `${label}${v >= 0 ? '+' : '-'}${v.toFixed(2)}`;
   });
 
   const cap = capitalAttention?.score != null ? `资金关注${capitalAttention.score}/100` : '';
@@ -1101,13 +1493,13 @@ function buildHistoricalContext({ bars, predictedMid, regimeLabel, volRegimeLabe
   const envLabel = [volRegimeLabel || '常态波', regimeLabel || '中性环境'].filter(Boolean).join('+');
   const regimeMatchSummary =
     similarDays60 > 0 && avgNextDayPct != null
-      ? `近60日类似环境(${envLabel})出现 ${similarDays60} 次，次日平均涨跌 ${avgNextDayPct >= 0 ? '+' : ''}${avgNextDayPct}%`
+      ? `近60日类似环境(${envLabel})出现 ${similarDays60} 次，次日平均涨跌 ${avgNextDayPct >= 0 ? '+' : '-'}${avgNextDayPct}%`
       : similarDays60 > 0
         ? `近60日类似波动幅度出现 ${similarDays60} 次`
         : '近60日少见与预测中心相当的波动幅度';
 
   const midText =
-    mid != null && !Number.isNaN(mid) ? `${mid >= 0 ? '+' : ''}${mid.toFixed(2)}%` : '当前预测';
+    mid != null && !Number.isNaN(mid) ? `${mid >= 0 ? '+' : '-'}${mid.toFixed(2)}%` : '当前预测';
   const oftenAppears = similarDays60 >= 5;
   const precedentSummary = oftenAppears
     ? `历史上${similarDays60}个交易日波幅接近预测中心${midText}，属较常出现；${
@@ -1160,11 +1552,11 @@ function buildPredictionRationale({
   const volPm = nextDayRangePct?.expectedMovePct ?? nextDayRangePct?.halfWidth;
   const chg =
     changePct != null && !Number.isNaN(Number(changePct))
-      ? `即时盘面${changePct >= 0 ? '+' : ''}${Number(changePct).toFixed(2)}%`
+      ? `即时盘面${changePct >= 0 ? '+' : '-'}${Number(changePct).toFixed(2)}%`
       : '';
   const latency = latencyLabel || latencyState || '';
   const instant =
-    instantScore != null ? `即时分${instantScore >= 0 ? '+' : ''}${Number(instantScore).toFixed(2)}` : '';
+    instantScore != null ? `即时分${instantScore >= 0 ? '+' : '-'}${Number(instantScore).toFixed(2)}` : '';
 
   let stressNote = '极端情景未触发';
   if (scenarios?.stress) {
@@ -1727,7 +2119,7 @@ function buildTechBadges(technical, outlookPending = false, extras = {}) {
   if (technical.oi?.deltaPct != null) {
     badges.push({
       id: 'oi',
-      label: `持仓${technical.oi.deltaPct > 0 ? '+' : ''}${technical.oi.deltaPct}%`,
+      label: `持仓${technical.oi.deltaPct > 0 ? '+' : '-'}${technical.oi.deltaPct}%`,
       trend: technical.oi.deltaPct > 0 ? 'up' : technical.oi.deltaPct < 0 ? 'down' : 'flat',
     });
   } else if (technical.oi?.display) {
@@ -1738,7 +2130,7 @@ function buildTechBadges(technical, outlookPending = false, extras = {}) {
   if (technical.intraday?.changePct != null && technical.hasLivePrice && !technical.maStack) {
     badges.push({
       id: 'intraday-chg',
-      label: `盘中${technical.intraday.changePct > 0 ? '+' : ''}${technical.intraday.changePct.toFixed(2)}%`,
+      label: `盘中${technical.intraday.changePct > 0 ? '+' : '-'}${technical.intraday.changePct.toFixed(2)}%`,
       trend: technical.intraday.changePct > 0.05 ? 'up' : technical.intraday.changePct < -0.05 ? 'down' : 'flat',
     });
   }
@@ -1888,8 +2280,27 @@ function buildInstrumentOutlooks(sources, globalCtx = null) {
 
       let macroScores = buildMacroScoresForInstrument(sources, spec.bucket);
       macroScores = applyLiveMacroEventMultipliers(macroScores, eventCtxMerged.weightMultipliers);
-      const capitalAttention = computeCapitalAttention(technical, liveQuote, sectorRanks[spec.id]);
-      const inventoryScore = computeInventoryScore(technical, profile);
+      const capitalAttention = computeCapitalAttention(technical, liveQuote, sectorRanks[spec.id], {
+        instrumentId: spec.id,
+        asOf: today,
+      });
+      const inventoryFactorRaw = computeInventoryScore(technical, profile, spec.id, today);
+      let inventoryFactor = inventoryFactorRaw;
+      try {
+        const { fundamentalsScoreForSymbol } = require('./commodity-fundamentals-fetcher');
+        const fundLane = fundamentalsScoreForSymbol(spec.id, sources.fundamentals);
+        if (fundLane.hits?.length) {
+          inventoryFactor = {
+            ...inventoryFactorRaw,
+            score: clamp(inventoryFactorRaw.score + fundLane.score, -0.4, 0.4),
+            fundamentals: fundLane,
+            dataSource: `${inventoryFactorRaw.dataSource}+fundamentals`,
+          };
+        }
+      } catch {
+        // optional lane
+      }
+      const inventoryScore = inventoryFactor.score;
       const weatherScore = computeWeatherScore(macroScores.climate, profile);
 
       const prelimScore = clamp(
@@ -1954,16 +2365,67 @@ function buildInstrumentOutlooks(sources, globalCtx = null) {
       const philMult = eventCtxMerged.weightMultipliers?.philosophy ?? 1;
       if (philMult !== 1) philosophyScore = clamp(philosophyScore * philMult, -1, 1);
       const blend = outlookCalibration.getCompositeWeights(today, eventCtxMerged, spec.sector);
-      const compositeScoreRaw = outlookCalibration.blendSectorComposite({
-        philosophyScore,
-        adaptiveScore: adaptive.compositeScore,
-        factorComposite,
-        sector: spec.sector,
-        date: today,
-        eventCtx: eventCtxMerged,
-      });
 
-      let compositeScore = compositeScoreRaw;
+      // 情报内核：主矛盾 → 状态条件权重 → 强制反对意见（在合成前介入）
+      let intelligenceKernel = null;
+      let compositeScoreRaw;
+      let compositeScore;
+      try {
+        const intel = require('./outlook-intelligence-kernel');
+        intelligenceKernel = intel.evaluateIntelligenceKernel({
+          phil,
+          stockFlow: inventoryFactor?.stockFlowJoint || null,
+          jointSignal: inventoryFactor?.jointSignal || capitalAttention?.jointSignal || null,
+          capitalAttention,
+          technical,
+          newsImpact,
+          regime,
+          baseBlend: blend,
+          sourceLaneCount,
+          inventoryFactor,
+        });
+        if (intelligenceKernel?.available) {
+          const kernelBlend = intel.blendWithKernelWeights(
+            philosophyScore,
+            adaptive.compositeScore,
+            factorComposite,
+            intelligenceKernel.conditionalWeights
+          );
+          compositeScoreRaw = kernelBlend.score;
+          compositeScore = intel.applyConviction(compositeScoreRaw, intelligenceKernel.conviction);
+          blend.philosophyWeight = intelligenceKernel.conditionalWeights.philosophyWeight;
+          blend.adaptiveWeight = intelligenceKernel.conditionalWeights.adaptiveWeight;
+          blend.factorWeight = intelligenceKernel.conditionalWeights.factorWeight;
+          blend.intelStateKey = intelligenceKernel.stateKey;
+          blend.intelRationale = intelligenceKernel.conditionalWeights.rationale;
+        } else {
+          compositeScoreRaw = outlookCalibration.blendSectorComposite({
+            philosophyScore,
+            adaptiveScore: adaptive.compositeScore,
+            factorComposite,
+            sector: spec.sector,
+            date: today,
+            eventCtx: eventCtxMerged,
+          });
+          compositeScore = compositeScoreRaw;
+        }
+      } catch (err) {
+        intelligenceKernel = {
+          version: 'v1.56.26-intel-kernel',
+          available: false,
+          reason: err?.message || 'intel_kernel_error',
+        };
+        compositeScoreRaw = outlookCalibration.blendSectorComposite({
+          philosophyScore,
+          adaptiveScore: adaptive.compositeScore,
+          factorComposite,
+          sector: spec.sector,
+          date: today,
+          eventCtx: eventCtxMerged,
+        });
+        compositeScore = compositeScoreRaw;
+      }
+
       let dirTier = outlookCalibration.scoreToDirectionTier(
         compositeScore,
         spec.sector,
@@ -2106,7 +2568,7 @@ function buildInstrumentOutlooks(sources, globalCtx = null) {
             id,
             label: `${label}${multNote}`,
             value: +value.toFixed(2),
-            display: `${value >= 0 ? '+' : ''}${value.toFixed(2)}`,
+            display: `${value >= 0 ? '+' : '-'}${value.toFixed(2)}`,
             regimeMultiplier: mult,
           };
         })
@@ -2136,6 +2598,7 @@ function buildInstrumentOutlooks(sources, globalCtx = null) {
         volume: technical.volume,
         oi: technical.oi,
         capitalAttention,
+        inventory: inventoryFactor,
         factorBreakdown,
         factorBreakdownDisplay,
         profile: {
@@ -2163,6 +2626,28 @@ function buildInstrumentOutlooks(sources, globalCtx = null) {
       });
 
       const klineBars = readCachedKlines(meta.id);
+      const l1BarIdx = klineBars.length ? klineBars.length - 1 : -1;
+      const l1Regime =
+        !outlookPending && l1BarIdx >= 0
+          ? classifyL1RegimeFromBars({
+              bars: klineBars,
+              barIndex: l1BarIdx,
+              instrumentId: spec.id,
+              sector: spec.sector,
+              technical,
+              newsImpact,
+              barDate: today,
+            })
+          : null;
+      const tradableDayState =
+        l1Regime?.regime != null
+          ? evaluateTradableDay({
+              instrumentId: spec.id,
+              date: today,
+              marketRegime: l1Regime.regime,
+            })
+          : { tradable: null, state: '待校验', dataSource: 'tradable-day-kpi' };
+      const calendarStaleness = klineBars.length ? resolveCalendarStaleness(klineBars, today) : null;
       const historicalContext = outlookPending
         ? {
             similarDays60: 0,
@@ -2180,6 +2665,112 @@ function buildInstrumentOutlooks(sources, globalCtx = null) {
             volRegimeLabel: technical.smoothedVol?.regimeLabel,
           });
 
+      let highLowPrediction = null;
+      if (ENABLE_RANGE_PREDICTION && !outlookPending && klineBars.length >= 10) {
+        try {
+          const { predictNextDayRange, toHighLowPrediction } = require('./next-day-range-predictor');
+          const rangeResult = predictNextDayRange({
+            instrumentId: spec.id,
+            klines: klineBars,
+            asOfDate: today,
+            compositeScore,
+            technical,
+            newsImpact,
+            regime,
+            marketRegime: l1Regime?.regime ?? regime,
+          });
+          highLowPrediction = toHighLowPrediction(rangeResult);
+        } catch {
+          // non-fatal
+        }
+      }
+
+      const regimeGate = evaluateRegimeGate({
+        instrumentId: spec.id,
+        l1Regime,
+        marketRegime: l1Regime?.regime,
+        marketRegimeLabel: l1Regime?.regimeLabel,
+        marketRegimeReasons: l1Regime?.reasons,
+        direction,
+        compositeScore,
+        baselineDate: highLowPrediction?.baselineDate ?? today,
+        baseClose: mergedQuote.price ?? null,
+        tradableDay: tradableDayState,
+        date: today,
+      });
+
+      let quantGate = null;
+      if (!outlookPending && klineBars.length >= 55) {
+        try {
+          const { evaluateQuantTradeGate } = require('./trading-rules-quant-gate');
+          quantGate = evaluateQuantTradeGate({
+            instrumentId: spec.id,
+            sector: spec.sector,
+            bars: klineBars,
+            barIndex: klineBars.length - 1,
+            regime: l1Regime?.regime ?? regime,
+            outlookDirection: direction,
+            compositeScore,
+            predictedDir: direction,
+            highLowPrediction,
+          });
+        } catch {
+          // non-fatal
+        }
+      }
+
+      const l2Live = blendL2LiveDirection({
+        instrumentId: spec.id,
+        sector: spec.sector,
+        philosophyScore,
+        adaptiveScore: adaptive.compositeScore,
+        factorComposite,
+        technical,
+        macroScores,
+        compositeScore,
+        marketRegime: l1Regime?.regime ?? regime,
+        today,
+      });
+
+      const l2Applied = applyL2BlendedDirection({
+        l2Live,
+        compositeScore,
+        dirTier,
+        directionLabelOverride,
+        insufficientData,
+        sector: spec.sector,
+        profile,
+        technical,
+        eventCtxMerged,
+        phil,
+        today,
+      });
+      compositeScore = l2Applied.compositeScore;
+      dirTier = l2Applied.dirTier;
+      direction = l2Applied.direction ?? direction;
+      directionLabelOverride = l2Applied.directionLabelOverride;
+      const l2LiveFinal = l2Applied.l2Live;
+
+      let contradictionMatrix = null;
+      try {
+        const cm = require('./contradiction-matrix');
+        contradictionMatrix = cm.buildContradictionMatrix({
+          id: meta.id,
+          name: meta.name,
+          changePct: mergedQuote.changePct,
+          price: mergedQuote.price,
+          priceSource: mergedQuote.priceSource,
+          bias: directionLabelOverride || dirTier.label,
+          directionLabel: directionLabelOverride || dirTier.label,
+          factors,
+          technical,
+          judgementUpdatedAt,
+        });
+        cm.persistCompetingHypotheses?.(contradictionMatrix);
+      } catch {
+        contradictionMatrix = null;
+      }
+
       const row = {
         id: meta.id,
         name: meta.name,
@@ -2194,7 +2785,7 @@ function buildInstrumentOutlooks(sources, globalCtx = null) {
         priceReason: mergedQuote.priceReason,
         outlookPending,
         compositeScore: +compositeScore.toFixed(2),
-        compositeScoreDisplay: `${compositeScore >= 0 ? '+' : ''}${compositeScore.toFixed(2)}`,
+        compositeScoreDisplay: `${compositeScore >= 0 ? '+' : '-'}${compositeScore.toFixed(2)}`,
         direction,
         directionTier: dirTier.direction,
         directionArrow: dirTier.arrow,
@@ -2211,9 +2802,18 @@ function buildInstrumentOutlooks(sources, globalCtx = null) {
         capitalAttention,
         capitalAttentionDisplay: capitalAttention.display,
         nextDayRangePct,
+        highLowPrediction,
         scenarios,
         regime,
         regimeLabel,
+        marketRegime: l1Regime?.regime ?? null,
+        marketRegimeLabel: l1Regime?.regimeLabel ?? null,
+        marketRegimeReasons: l1Regime?.reasons ?? [],
+        l2Live: l2LiveFinal,
+        regimeGate,
+        quantGate,
+        tradableDay: tradableDayState,
+        calendarStaleness,
         regimeTriggers: ctx.triggers,
         judgementUpdatedAt,
         judgementUpdatedDisplay: formatJudgementTime(judgementUpdatedAt),
@@ -2238,6 +2838,42 @@ function buildInstrumentOutlooks(sources, globalCtx = null) {
         predictionRationale,
         sourceNote: technical.sourceNote,
         profileSummary: `${profile.volatilityTier}波动 · ${profile.supplyDemandType} · ${profile.tradingSession} · ${regimeLabel}`,
+        contradictionMatrix,
+        competingHypotheses: contradictionMatrix?.competingHypotheses || null,
+        intelligenceKernel: intelligenceKernel
+          ? {
+              version: intelligenceKernel.version,
+              available: intelligenceKernel.available,
+              summary: intelligenceKernel.summary || null,
+              stateKey: intelligenceKernel.stateKey || null,
+              mainContradiction: intelligenceKernel.mainContradiction || null,
+              conditionalWeights: intelligenceKernel.conditionalWeights
+                ? {
+                    philosophyWeight: intelligenceKernel.conditionalWeights.philosophyWeight,
+                    adaptiveWeight: intelligenceKernel.conditionalWeights.adaptiveWeight,
+                    factorWeight: intelligenceKernel.conditionalWeights.factorWeight,
+                    stateKey: intelligenceKernel.conditionalWeights.stateKey,
+                    coarseKey: intelligenceKernel.conditionalWeights.coarseKey || null,
+                    method: intelligenceKernel.conditionalWeights.method || null,
+                    calibrated: intelligenceKernel.conditionalWeights.calibrated || null,
+                    rationale: intelligenceKernel.conditionalWeights.rationale,
+                  }
+                : null,
+              dissent: intelligenceKernel.dissent
+                ? {
+                    lean: intelligenceKernel.dissent.lean,
+                    supportingEvidence: intelligenceKernel.dissent.supportingEvidence,
+                    opposingEvidence: intelligenceKernel.dissent.opposingEvidence,
+                    dissentStrength: intelligenceKernel.dissent.dissentStrength,
+                    flipConditions: intelligenceKernel.dissent.flipConditions,
+                  }
+                : null,
+              conviction: intelligenceKernel.conviction || null,
+              method: intelligenceKernel.method || null,
+              dataSource: intelligenceKernel.dataSource || null,
+              reason: intelligenceKernel.reason || null,
+            }
+          : null,
         wInstant: adaptive.wInstant,
         wDelayed: adaptive.wDelayed,
         instantScore: adaptive.instantScore,
@@ -2296,11 +2932,25 @@ function buildCommodityOutlookFromSources(sources = {}) {
     categories = buildCategoryOutlooks(sources);
     factors = buildFactorsPanel(globalFactors);
     instruments = buildInstrumentOutlooks(sources, globalCtx);
+    applyCapitalAttentionRanks(instruments);
   } catch (err) {
+    console.warn('[commodity-outlook-engine] buildCommodityOutlookFromSources:', err?.message || err);
     globalFactors = {};
     categories = buildCategoryOutlooks({});
     factors = buildFactorsPanel(globalFactors);
     instruments = [];
+    const previous = getCachedCommodityOutlookSource();
+    if (previous?.instruments?.length) {
+      return {
+        ...previous,
+        updatedAt: new Date().toISOString(),
+        error: err?.message || '研判计算异常',
+        stats: {
+          ...(previous.stats || {}),
+          dataQualityLabel: `${previous.stats?.dataQuality ?? 0}/9 路数据源 · 本次重算失败，已回退缓存`,
+        },
+      };
+    }
     return {
       key: 'outlook',
       name: '大宗商品走势研判',
@@ -2333,6 +2983,29 @@ function buildCommodityOutlookFromSources(sources = {}) {
 
   const techReady = instruments.filter((i) => i.factors?.technical?.hasEnough).length;
 
+  const todayIso = new Date().toISOString().slice(0, 10);
+  let intelCenterPack = null;
+  try {
+    const intelOrch = require('./intel-orchestrator');
+    instruments = intelOrch.applyIntelCenterToInstruments(instruments, {
+      asOf: todayIso,
+      globalRegime: globalCtx.regime,
+      persist: true,
+    });
+    intelCenterPack = intelOrch.buildIntelCenterPack(instruments, {
+      asOf: todayIso,
+      globalRegime: globalCtx.regime,
+      persist: false,
+    });
+  } catch (intelErr) {
+    console.warn('[commodity-outlook-engine] intel center pack:', intelErr?.message || intelErr);
+    intelCenterPack = {
+      version: 'v2.58.0-intel-center',
+      available: false,
+      reason: intelErr?.message || 'intel_center_error',
+    };
+  }
+
   return {
     key: 'outlook',
     name: '大宗商品走势研判',
@@ -2353,9 +3026,12 @@ function buildCommodityOutlookFromSources(sources = {}) {
       rangeFormula: 'compositeVol=基线EMA+shockWeight×突变；情景区间按方向偏置',
       sectorClassCaps: SECTOR_CLASS_MAX_PCT,
       version: OUTLOOK_ENGINE_VERSION,
+      intelCenterVersion: intelCenterPack?.version || null,
+      intelCenterModel: 'chief-of-staff-pipeline',
     },
     globalRegime: globalCtx.regime,
     globalRegimeLabel: globalCtx.regimeLabel,
+    intelCenterPack,
     sectors: OUTLOOK_SECTORS,
     stats: {
       categoryCount: categories.length,
@@ -2363,7 +3039,7 @@ function buildCommodityOutlookFromSources(sources = {}) {
       techReadyCount: techReady,
       factorCount: factors.length,
       dataQuality,
-      dataQualityLabel: `${dataQuality}/8 路数据源 · ${techReady}/${instruments.length} 品种技术面就绪`,
+      dataQualityLabel: `${dataQuality}/9 路数据源 · ${techReady}/${instruments.length} 品种技术面就绪`,
       directionHitRate7d: outlookHistory.getDirectionHitRate7d(),
       backtestHitRate30d: backtestSummary?.overallHitRate30d ?? null,
       backtestHitRate60d: backtestSummary?.overallHitRate60d ?? null,
@@ -2404,6 +3080,17 @@ function enrichSourcesForOutlook(sources = {}) {
   if (!next.commodities?.exchanges?.length && sources.commodities?.exchanges?.length) {
     next.commodities = sources.commodities;
   }
+  try {
+    const { getCachedFundamentalsSource } = require('./commodity-fundamentals-fetcher');
+    const fundamentals = sources.fundamentals?.indicators?.length
+      ? sources.fundamentals
+      : getCachedFundamentalsSource();
+    if (fundamentals?.indicators?.length) {
+      next.fundamentals = fundamentals;
+    }
+  } catch {
+    // optional lane
+  }
   return next;
 }
 
@@ -2415,7 +3102,7 @@ async function fetchCommodityOutlookSource(sources) {
     // continue with cached/partial klines
   }
   triggerOutlookKlineBackfill().catch(() => {});
-  const payload = buildCommodityOutlookFromSources(enriched);
+  let payload = buildCommodityOutlookFromSources(enriched);
   lastOutlookFingerprint = computeOutlookFingerprint(enriched, enriched.commodities);
   const hist = outlookHistory.recordOutlookSnapshots(payload.instruments, {
     dataVersion: lastOutlookDataVersion,
@@ -2436,7 +3123,38 @@ async function fetchCommodityOutlookSource(sources) {
   payload.stats.longRunByEra = lr?.byEra ?? null;
   payload.stats.calibrationPath = outlookCalibration.getCalibrationPath();
   payload.stats.dailySnapshotPath = outlookHistory.getDailySummaryPath();
-  diskCache.write(OUTLOOK_DISK_KEY, { data: payload, savedAt: Date.now() });
+  try {
+    const { ensureOutlookGuidanceHydrated } = require('./global-risk-regime');
+    payload = ensureOutlookGuidanceHydrated(payload, enriched, { force: true }) || payload;
+  } catch (err) {
+    console.warn('[commodity-outlook-engine] guidance hydrate:', err?.message || err);
+    try {
+      payload =
+        require('./global-risk-regime').refreshGlobalRiskOnOutlook(payload, enriched, { force: true }) || payload;
+    } catch (err2) {
+      console.warn('[commodity-outlook-engine] guidance hydrate retry:', err2?.message || err2);
+    }
+  }
+  if (!payload?.instruments?.length) {
+    const previous = getCachedCommodityOutlookSource();
+    if (previous?.instruments?.length) {
+      console.warn('[commodity-outlook-engine] skip writing empty instruments cache; keeping previous snapshot');
+      return { ...previous, error: payload?.error || '研判品种列表为空', updatedAt: new Date().toISOString() };
+    }
+  } else {
+    try {
+      const { stripIntelPackForDisk } = require('./intel-orchestrator');
+      diskCache.write(OUTLOOK_DISK_KEY, {
+        data: {
+          ...payload,
+          intelCenterPack: stripIntelPackForDisk(payload.intelCenterPack),
+        },
+        savedAt: Date.now(),
+      });
+    } catch {
+      diskCache.write(OUTLOOK_DISK_KEY, { data: payload, savedAt: Date.now() });
+    }
+  }
   return payload;
 }
 
@@ -2459,8 +3177,34 @@ function notifyOutlookSourcesRefreshed(sources) {
 
 function getCachedCommodityOutlookSource() {
   const stored = diskCache.readStale(OUTLOOK_DISK_KEY);
-  if (stored?.data?.instruments?.length || stored?.data?.categories?.length) return stored.data;
+  const data = stored?.data;
+  if (data?.instruments?.length) return hydrateIntelCenterOnOutlook(hydrateCapitalAttitudeOnOutlook(data));
+  for (const legacyKey of ['commodity-outlook-v3.json', 'commodity-outlook-v2.json']) {
+    const legacy = diskCache.readStale(legacyKey);
+    if (legacy?.data?.instruments?.length) {
+      console.warn(`[commodity-outlook-engine] v4 cache empty — restoring instruments from ${legacyKey}`);
+      const restored = {
+        ...legacy.data,
+        ...data,
+        instruments: legacy.data.instruments,
+        categories: data?.categories?.length ? data.categories : legacy.data.categories,
+        stats: {
+          ...(legacy.data.stats || {}),
+          ...(data?.stats || {}),
+          instrumentCount: legacy.data.instruments.length,
+          restoredFrom: legacyKey,
+        },
+        updatedAt: new Date().toISOString(),
+      };
+      diskCache.write(OUTLOOK_DISK_KEY, { data: restored, savedAt: Date.now() });
+      return hydrateIntelCenterOnOutlook(hydrateCapitalAttitudeOnOutlook(restored));
+    }
+  }
   return null;
+}
+
+function hasOutlookCategoryFallback(data) {
+  return Boolean(data?.categories?.length && !data?.instruments?.length);
 }
 
 function fetchCommodityOutlookLive({ force = false, sources } = {}) {
@@ -2474,22 +3218,129 @@ function fetchCommodityOutlookLive({ force = false, sources } = {}) {
     const stale = diskCache.readStale(OUTLOOK_DISK_KEY);
     const cachedCount = cached?.instruments?.length || 0;
     const registryStale = cachedCount > 0 && cachedCount < expectedCount - 2;
+    const categoryOnlyCache = hasOutlookCategoryFallback(stale?.data);
 
-    if (cached?.instruments?.length || cached?.categories?.length) {
-      if (registryStale || (hasCommodities && cachedCount === 0)) {
+    if (categoryOnlyCache || (cachedCount === 0 && hasCommodities)) {
+      refreshCommodityOutlookInBackground(allSources);
+      if (cached?.instruments?.length) {
+        return Promise.resolve({ ...cached, fromCache: true, stale: true });
+      }
+      return fetchCommodityOutlookSource(allSources);
+    }
+
+    if (cached?.instruments?.length) {
+      if (registryStale) {
         return fetchCommodityOutlookSource(allSources);
       }
       if (Date.now() - (stale?.savedAt || 0) > OUTLOOK_DISK_TTL_MS) {
         refreshCommodityOutlookInBackground(allSources);
       }
-      return Promise.resolve({ ...cached, fromCache: true });
+      let hydrated = cached;
+      try {
+        const { ensureOutlookGuidanceHydrated } = require('./global-risk-regime');
+        hydrated = ensureOutlookGuidanceHydrated(cached, allSources) || cached;
+        if (hydrated !== cached && hydrated?.instruments?.length) {
+          diskCache.write(OUTLOOK_DISK_KEY, { data: hydrated, savedAt: Date.now() });
+        }
+      } catch (err) {
+        console.warn('[commodity-outlook-engine] cache guidance hydrate:', err?.message || err);
+      }
+      return Promise.resolve({ ...hydrated, fromCache: true });
     }
     if (hasCommodities) {
+      refreshCommodityOutlookInBackground(allSources);
+      if (cached?.instruments?.length) {
+        return Promise.resolve({ ...cached, fromCache: true, stale: true });
+      }
       return fetchCommodityOutlookSource(allSources);
     }
   }
 
   return fetchCommodityOutlookSource(allSources);
+}
+
+function invalidateOutlookDiskCache() {
+  diskCache.remove(OUTLOOK_DISK_KEY);
+  lastOutlookFingerprint = null;
+  return { ok: true, key: OUTLOOK_DISK_KEY };
+}
+
+function patchOutlookPricesFromCommodities(cached, commodities, opts = {}) {
+  if (!cached?.instruments?.length || !commodities) return null;
+  const liveRefreshedAt = new Date().toISOString();
+  let patched = {
+    ...cached,
+    instruments: cached.instruments.map((inst) => {
+      const spec =
+        INSTRUMENT_REGISTRY.find((s) => normalizeCommodityId(s.id) === normalizeCommodityId(inst.id)) ||
+        { id: inst.id };
+      const mergedQuote = resolveInstrumentQuote(spec, commodities, {
+        price: inst.price,
+        changePct: inst.changePct,
+      });
+      return {
+        ...inst,
+        price: mergedQuote.price,
+        changePct: mergedQuote.changePct,
+        priceReason: mergedQuote.priceReason ?? inst.priceReason,
+        outlookPending: mergedQuote.price == null,
+      };
+    }),
+    liveRefreshedAt: opts.forceStamp ? liveRefreshedAt : cached.liveRefreshedAt || liveRefreshedAt,
+  };
+  try {
+    if (!opts.skipGuidanceRefresh) {
+      patched = require('./global-risk-regime').refreshGlobalRiskOnOutlook(patched, { commodities }) || patched;
+    }
+  } catch {
+    // non-fatal
+  }
+  patched = hydrateCapitalAttitudeOnOutlook(patched, { persist: false });
+  diskCache.write(OUTLOOK_DISK_KEY, { data: patched, savedAt: Date.now() });
+  return patched;
+}
+
+async function refreshOutlookForPushCycle(sources) {
+  const { getCachedAllData } = require('./data-fetcher');
+  const allSources = enrichSourcesForOutlook(sources || getCachedAllData()?.sources || {});
+  const cached = getCachedCommodityOutlookSource();
+  const expectedCount = INSTRUMENT_REGISTRY.length;
+  const cachedCount = cached?.instruments?.length || 0;
+  const registryStale = cachedCount > 0 && cachedCount < expectedCount - 2;
+  const hasCommodities = allSources.commodities?.exchanges?.some((e) =>
+    e.items?.some((i) => i.price != null)
+  );
+
+  if (cached?.instruments?.length && hasCommodities && !registryStale) {
+    const patched = patchOutlookPricesFromCommodities(cached, allSources.commodities, {
+      forceStamp: true,
+    });
+    if (patched) {
+      let outlook = patched;
+      try {
+        outlook = require('./global-risk-regime').refreshGlobalRiskOnOutlook(outlook, allSources) || outlook;
+        diskCache.write(OUTLOOK_DISK_KEY, { data: outlook, savedAt: Date.now() });
+      } catch {
+        // non-fatal
+      }
+      return outlook;
+    }
+  }
+
+  let outlook = await fetchCommodityOutlookSource(allSources);
+  try {
+    outlook = require('./global-risk-regime').refreshGlobalRiskOnOutlook(outlook, allSources) || outlook;
+    diskCache.write(OUTLOOK_DISK_KEY, { data: outlook, savedAt: Date.now() });
+  } catch {
+    // non-fatal
+  }
+  return outlook;
+}
+
+let outlookBackgroundCompleteHook = null;
+
+function setOutlookBackgroundCompleteHook(fn) {
+  outlookBackgroundCompleteHook = typeof fn === 'function' ? fn : null;
 }
 
 function refreshCommodityOutlookInBackground(sources) {
@@ -2499,6 +3350,16 @@ function refreshCommodityOutlookInBackground(sources) {
       const { getCachedAllData } = require('./data-fetcher');
       const allSources = sources || getCachedAllData()?.sources || {};
       return fetchCommodityOutlookSource(allSources);
+    })
+    .then((payload) => {
+      if (payload?.instruments?.length && outlookBackgroundCompleteHook) {
+        try {
+          outlookBackgroundCompleteHook(payload);
+        } catch (err) {
+          console.warn('[commodity-outlook-engine] background complete hook:', err?.message || err);
+        }
+      }
+      return payload;
     })
     .catch(() => null)
     .finally(() => {
@@ -2523,7 +3384,11 @@ module.exports = {
   fetchCommodityOutlookSource,
   getCachedCommodityOutlookSource,
   fetchCommodityOutlookLive,
+  invalidateOutlookDiskCache,
+  patchOutlookPricesFromCommodities,
+  refreshOutlookForPushCycle,
   refreshCommodityOutlookInBackground,
+  setOutlookBackgroundCompleteHook,
   scheduleOutlookRecomputeOnSourcesChange,
   notifyOutlookSourcesRefreshed,
   triggerOutlookKlineBackfill,
@@ -2533,6 +3398,7 @@ module.exports = {
   computeVolBias,
   computeNextDayRangePct,
   computeCapitalAttention,
+  computeInventoryScore,
   buildFactorBreakdown,
   getClassMaxPct,
   SECTOR_CLASS_MAX_PCT,
@@ -2542,6 +3408,8 @@ module.exports = {
   formatJudgementTime,
   buildPredictionRationale,
   buildHistoricalContext,
+  hydrateCapitalAttitudeOnOutlook,
+  hydrateIntelCenterOnOutlook,
   OUTLOOK_ENGINE_VERSION,
   scoreToDirection,
   buildMacroScoresForInstrument,

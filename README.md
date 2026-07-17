@@ -2,7 +2,7 @@
 
 全球指数、大宗商品、中美宏观、外汇、政策雷达、地缘政治、美联储、日本央行、新华社等信息聚合桌面应用。
 
-**当前版本：v1.12.2**（源码目录：`E:\FanchengFinance\source\fancheng-finance`）
+**当前版本：v1.42.0-integrated-spec**（源码目录：`E:\FanchengFinance\source\fancheng-finance`）
 
 ## 功能
 
@@ -71,6 +71,10 @@ FRED_API_KEY=你的32位密钥
 - Electron
 - rss-parser（RSS 新闻）
 - FRED API / Treasury Fiscal Data API（公开数据）
+
+## 文档
+
+产品哲学（变量层研判 vs 常量层执行）：[`docs/PRODUCT_PHILOSOPHY_VARIABLE_CONSTANT.md`](docs/PRODUCT_PHILOSOPHY_VARIABLE_CONSTANT.md)
 
 ## 数据来源
 

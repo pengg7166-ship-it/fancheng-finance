@@ -1,35 +1,40 @@
 @echo off
 chcp 65001 >nul
-title 梵澄金融 - 更新并启�?cd /d "%~dp0"
+title 梵澄金融 - 更新打包
+cd /d "%~dp0"
 
 for /f "delims=" %%V in ('node -p "require('./package.json').version"') do set "APPVER=%%V"
 
 echo ========================================
-echo   梵澄金融 v%APPVER% 更新程序
+echo   梵澄金融 v%APPVER% 更新打包
 echo ========================================
 echo.
 
+set "FANCHENG_APP_ROOT=F:\FanchengFinance"
 set "PATH=C:\Program Files\nodejs;%PATH%"
+set "FANCHENG_DATA_DIR=F:\FanchengFinance"
+set "FANCHENG_DATA_DRIVE=F"
+set "FANCHENG_ROOT=%FANCHENG_APP_ROOT%"
 set "ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/"
 set "ELECTRON_BUILDER_BINARIES_MIRROR=https://npmmirror.com/mirrors/electron-builder-binaries/"
 set "CSC_IDENTITY_AUTO_DISCOVERY=false"
 
-echo [1/3] 正在打包最新版�?..
+echo [1/4] 关闭运行中的实例...
 taskkill /F /IM "FanchengFinance.exe" >nul 2>&1
 taskkill /F /IM "梵澄金融.exe" >nul 2>&1
 timeout /t 2 /nobreak >nul
 call npx electron-builder --win --dir
 if errorlevel 1 (
-  echo 打包失败，请完全退出梵澄金融后重试
+  echo 打包失败，请关闭应用后重试。
   pause
   exit /b 1
 )
 
 echo.
-echo [2/4] 同步�?dist-out（快捷方式目标）...
+echo [2/4] 同步 dist-out 到 %FANCHENG_APP_ROOT%\app\win-unpacked ...
 node scripts/sync-dist-out.js
 if errorlevel 1 (
-  echo 同步失败，请完全退出梵澄金融后重试
+  echo 同步失败，请检查磁盘空间与权限。
   pause
   exit /b 1
 )
@@ -40,16 +45,17 @@ powershell -ExecutionPolicy Bypass -File "%~dp0update-shortcuts.ps1"
 
 echo.
 echo [4/4] 启动应用...
-set "EXE="
-if exist "%~dp0dist-build\win-unpacked\FanchengFinance.exe" set "EXE=%~dp0dist-build\win-unpacked\FanchengFinance.exe"
-if not defined EXE if exist "%~dp0dist-build\win-unpacked\梵澄金融.exe" set "EXE=%~dp0dist-build\win-unpacked\梵澄金融.exe"
-if not defined EXE (
-  echo 未找�?FanchengFinance.exe，请先完成打包或运行「更新梵澄金�?bat�?
+set "EXE=%FANCHENG_APP_ROOT%\app\win-unpacked\FanchengFinance.exe"
+if not exist "%EXE%" set "EXE=%~dp0dist-out\win-unpacked\FanchengFinance.exe"
+if not exist "%EXE%" set "EXE=%~dp0dist-build\win-unpacked\FanchengFinance.exe"
+if not exist "%EXE%" (
+  echo 未找到 FanchengFinance.exe，请先完成打包。
   pause
   exit /b 1
 )
 start "" "%EXE%"
 
 echo.
-echo 更新完成！窗口底部应显示 v%APPVER%
+echo 更新完成，已启动梵澄金融 v%APPVER%
+echo 程序路径: %FANCHENG_APP_ROOT%\app\win-unpacked\FanchengFinance.exe
 pause

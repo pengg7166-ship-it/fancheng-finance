@@ -197,6 +197,7 @@ module.exports = {
   detectImpactDirection,
   normalizeCommodityId,
   findTagById,
+  MACRO_COMMODITY_ALIASES,
   get COMMODITY_POLICY_TAGS() {
     return getCommodityPolicyTags();
   },

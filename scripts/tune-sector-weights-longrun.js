@@ -1,15 +1,37 @@
-/** 长周期回测 + 板块权重网格搜索（v1.27） */
+/** 长周期回测 + 板块权重网格搜索（v1.29） */
+const fs = require('fs');
 const path = require('path');
 process.chdir(path.join(__dirname, '..'));
+process.env.FANCHENG_DATA_DRIVE = process.env.FANCHENG_DATA_DRIVE || 'E';
 
 const diskCache = require('../services/disk-cache');
 const { getUserDataDir, getDataDir } = require('../services/data-paths');
 const historicalContext = require('../services/commodity-outlook-historical-context');
 const backtest = require('../services/commodity-outlook-backtest');
 const calibration = require('../services/commodity-outlook-calibration');
+const { readCachedKlines } = require('../services/commodity-technical-analyzer');
+const { INSTRUMENT_REGISTRY } = require('../services/commodity-outlook-engine');
+
+function resolveDataRoot() {
+  const candidates = [
+    getDataDir(),
+    path.join('E:', 'FanchengFinance', 'data'),
+    path.join(process.cwd(), 'data'),
+  ].filter(Boolean);
+  for (const dir of candidates) {
+    if (fs.existsSync(path.join(dir, 'klines', 'commodity-au-day.json'))) return dir;
+  }
+  return candidates[0];
+}
 
 async function main() {
-  diskCache.init(getUserDataDir() || getDataDir() || path.join(process.cwd(), 'data'));
+  const dataRoot = resolveDataRoot();
+  diskCache.init(dataRoot);
+  const eligible = INSTRUMENT_REGISTRY.filter((s) => readCachedKlines(s.id).length >= 60).length;
+  console.log('dataRoot:', diskCache.getRoot(), 'eligible:', eligible);
+  if (eligible < 10) {
+    throw new Error(`K线缓存不足（${eligible} 品种），请确认 ${dataRoot}/klines`);
+  }
   await historicalContext.ensureFredDailyCache();
 
   const before = backtest.loadLongrunSummary();
@@ -21,7 +43,7 @@ async function main() {
     }
   }
 
-  console.log('\n=== Running longrun backtest v1.27 (force) ===');
+  console.log('\n=== Running longrun backtest v1.29 (force) ===');
   const t0 = Date.now();
   const summary = await backtest.runLongrunBacktest2019({
     force: true,
@@ -29,14 +51,7 @@ async function main() {
   });
   console.log(`\nDone in ${Math.round((Date.now() - t0) / 1000)}s`);
 
-  console.log('\n=== AFTER ===');
-  console.log('overall', summary.overallHitRate != null ? `${Math.round(summary.overallHitRate * 100)}%` : '—');
-  console.log('target 70%', summary.overallHitRate >= 0.7 ? 'REACHED' : `gap +${Math.round((0.7 - summary.overallHitRate) * 100)}pp`);
-  for (const [s, st] of Object.entries(summary.bySector || {})) {
-    const pct = st.hitRate != null ? Math.round(st.hitRate * 100) : '—';
-    const gap = st.hitRate != null ? Math.round((0.7 - st.hitRate) * 100) : '—';
-    console.log(`  ${s}: ${pct}% (gap ${gap}pp) ${st.hits}/${st.total}`);
-  }
+  backtest.printLongrunKpiReport(summary, { label: 'AFTER longrun' });
 
   const cal = calibration.loadCalibration(true);
   console.log('\n=== Sector tuned weights (sample) ===');
@@ -51,12 +66,26 @@ async function main() {
   const outPath = path.join(process.cwd(), '_sector-tune-result.json');
   require('fs').writeFileSync(
     outPath,
-    JSON.stringify({ before: before?.bySector, after: summary.bySector, overall: summary.overallHitRate }, null, 2)
+    JSON.stringify(
+      {
+        before: before?.bySector,
+        after: summary.bySector,
+        overall: summary.overallHitRate,
+        coreLiquidity: summary.coreLiquidity,
+        sectorGaps: backtest.KPI_SECTOR_IDS.reduce((acc, id) => {
+          const st = summary.bySector?.[id];
+          acc[id] = st?.hitRate != null ? +(backtest.KPI_SECTOR_TARGET - st.hitRate).toFixed(4) : null;
+          return acc;
+        }, {}),
+      },
+      null,
+      2
+    )
   );
   console.log('\nWrote', outPath);
 }
 
 main().catch((err) => {
-  console.error(err);
+  console.error('longrun failed:', err?.stack || err);
   process.exit(1);
 });

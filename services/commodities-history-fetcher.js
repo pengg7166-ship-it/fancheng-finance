@@ -1,9 +1,12 @@
+const fs = require('fs');
+const path = require('path');
 const { getCommodityMeta, listCommoditiesWithHistory } = require('./commodities-catalog');
 const { fetchJson, fetchText } = require('./http-client');
 const diskCache = require('./disk-cache');
 
 const KLINE_DISK_TTL_MS = 24 * 60 * 60 * 1000;
 const KLINE_HOUR_DISK_TTL_MS = 60 * 60 * 1000;
+const MIN_HISTORY_START = '2019-01-01';
 
 function klineDiskKey(commodityId, timeframe) {
   return `klines/commodity-${commodityId}-${timeframe}.json`;
@@ -24,7 +27,9 @@ const TIMEFRAMES = {
   month: { label: '月K', klt: 103, pageSize: 500, maxYears: 20 },
   week: { label: '周K', klt: 102, pageSize: 500, maxYears: 20 },
   day: { label: '日K', klt: 101, pageSize: 5000, paginate: true, maxYears: 20 },
-  hour: { label: '小时K', klt: 60, pageSize: 5000, paginate: true, maxYears: 20 },
+  hour: { label: '小时K', klt: 60, pageSize: 5000, paginate: true, maxYears: 20, sinaType: 60 },
+  '15m': { label: '15分K', klt: 15, pageSize: 5000, paginate: true, maxYears: 3, sinaType: 15 },
+  '5m': { label: '5分K', klt: 5, pageSize: 5000, paginate: true, maxYears: 3, sinaType: 5 },
 };
 
 function dateToNum(d) {
@@ -45,9 +50,135 @@ function filterByYears(bars, years) {
   return bars.filter((b) => dateToNum(b.date) >= minDate);
 }
 
-function normalizeBar({ date, open, close, high, low, volume = 0 }) {
+function normalizeBar({ date, open, close, high, low, volume = 0, openInterest = null }) {
   if ([open, close, high, low].some((v) => Number.isNaN(v))) return null;
-  return { date, open, close, high, low, volume: Number.isNaN(volume) ? 0 : volume };
+  const bar = { date, open, close, high, low, volume: Number.isNaN(volume) ? 0 : volume };
+  const oi = openInterest != null ? Number(openInterest) : null;
+  if (oi != null && Number.isFinite(oi) && oi > 0) bar.openInterest = Math.round(oi);
+  return bar;
+}
+
+/**
+ * Eastmoney kline fields2=f51..f63:
+ * f51 date, f52 open, f53 close, f54 high, f55 low, f56 vol, f57 amount, …, f63 hold(OI)
+ */
+function parseKlineRowWithOi(line) {
+  const p = line.split(',');
+  if (p.length < 6) return null;
+  const bar = normalizeBar({
+    date: p[0],
+    open: parseFloat(p[1]),
+    close: parseFloat(p[2]),
+    high: parseFloat(p[3]),
+    low: parseFloat(p[4]),
+    volume: p[5] ? parseFloat(p[5]) : 0,
+  });
+  if (!bar) return null;
+  // Prefer f63 (index 12). Legacy short rows may only have f57 at [6] — that is amount, not OI.
+  const oiCand =
+    p.length >= 13 ? parseFloat(p[12]) : p.length >= 7 && parseFloat(p[6]) < 1e9 ? parseFloat(p[6]) : NaN;
+  if (Number.isFinite(oiCand) && oiCand > 0) bar.openInterest = Math.round(oiCand);
+  return bar;
+}
+
+function loadTradingOiBars(instrumentId) {
+  const { getDataDir } = require('./data-paths');
+  const dataDir = getDataDir() || path.join(process.cwd(), 'data');
+  const fp = path.join(dataDir, 'history', 'trading', `${String(instrumentId).toLowerCase()}.json`);
+  if (!fs.existsSync(fp)) return [];
+  try {
+    const raw = JSON.parse(fs.readFileSync(fp, 'utf8'));
+    const bars = Array.isArray(raw) ? raw : raw.series || [];
+    return bars
+      .map((b) => ({
+        date: String(b.date).slice(0, 10),
+        openInterest: Math.round(b.openInterest ?? b.oi ?? 0),
+      }))
+      .filter((b) => b.date >= MIN_HISTORY_START && b.openInterest > 0);
+  } catch {
+    return [];
+  }
+}
+
+async function fetchEastmoneyOiBars(instrumentId) {
+  const meta = getCommodityMeta(instrumentId);
+  if (!meta?.eastmoneySecid) return [];
+  const url = new URL('https://push2his.eastmoney.com/api/qt/stock/kline/get');
+  url.searchParams.set('secid', meta.eastmoneySecid);
+  url.searchParams.set('fields1', 'f1,f2,f3,f4,f5,f6');
+  url.searchParams.set('fields2', 'f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61,f62,f63');
+  url.searchParams.set('klt', '101');
+  url.searchParams.set('fqt', '0');
+  url.searchParams.set('end', '20500101');
+  url.searchParams.set('lmt', '5000');
+  const json = await fetchJson(url.toString(), { headers: EM_HEADERS, retries: 2, timeout: 20000 });
+  return (json.data?.klines || [])
+    .map(parseKlineRowWithOi)
+    .filter((b) => b?.openInterest > 0 && String(b.date).slice(0, 10) >= MIN_HISTORY_START);
+}
+
+function lastOiDateFromBars(bars) {
+  for (let i = (bars || []).length - 1; i >= 0; i -= 1) {
+    const oi = bars[i]?.openInterest ?? bars[i]?.oi;
+    if (oi > 0) return String(bars[i].date).slice(0, 10);
+  }
+  return null;
+}
+
+async function fetchSinaDailyBarsWithOi(sinaSymbol) {
+  const url = `https://stock2.finance.sina.com.cn/futures/api/json.php/InnerFuturesNewService.getDailyKLine?symbol=${encodeURIComponent(sinaSymbol)}`;
+  const rows = await fetchJson(url, { headers: SINA_HEADERS, retries: 2 });
+  if (!Array.isArray(rows)) return [];
+  return rows
+    .map((row) =>
+      normalizeBar({
+        date: row.d,
+        open: parseFloat(row.o),
+        high: parseFloat(row.h),
+        low: parseFloat(row.l),
+        close: parseFloat(row.c),
+        volume: parseFloat(row.v),
+        openInterest: row.p != null ? parseFloat(row.p) : null,
+      })
+    )
+    .filter((b) => b && b.openInterest > 0 && String(b.date).slice(0, 10) >= MIN_HISTORY_START);
+}
+
+async function fetchFuturesDailyWithOi(instrumentId) {
+  const id = String(instrumentId || '').toLowerCase();
+  const tradingBars = loadTradingOiBars(id);
+  const diskLastOi = lastOiDateFromBars(tradingBars);
+  const today = new Date().toISOString().slice(0, 10);
+  const diskFresh =
+    diskLastOi &&
+    (Date.parse(today) - Date.parse(diskLastOi)) / 86400000 <= 2;
+
+  // Prefer live when disk OI lags last trading calendar; keep disk only as fallback.
+  const meta = getCommodityMeta(id);
+  try {
+    if (meta?.sinaSymbol) {
+      const sinaBars = await fetchSinaDailyBarsWithOi(meta.sinaSymbol);
+      const sinaLast = lastOiDateFromBars(sinaBars);
+      if (sinaBars.length >= 10 && sinaLast && (!diskFresh || !diskLastOi || sinaLast >= diskLastOi)) {
+        return { bars: sinaBars, source: 'sina-daily-p' };
+      }
+    }
+  } catch {
+    /* fall through */
+  }
+  try {
+    const bars = await fetchEastmoneyOiBars(id);
+    const emLast = lastOiDateFromBars(bars);
+    if (bars.length >= 10 && emLast && (!diskFresh || !diskLastOi || emLast >= diskLastOi)) {
+      return { bars, source: 'eastmoney-futures-f63' };
+    }
+  } catch {
+    /* fall through */
+  }
+  return {
+    bars: tradingBars,
+    source: tradingBars.length ? (diskFresh ? 'history-trading' : 'history-trading-stale') : 'missing',
+  };
 }
 
 function parseKlineRow(line) {
@@ -140,6 +271,7 @@ async function fetchSinaDailyBars(sinaSymbol) {
         low: parseFloat(row.l),
         close: parseFloat(row.c),
         volume: parseFloat(row.v),
+        openInterest: row.p != null ? parseFloat(row.p) : null,
       })
     )
     .filter(Boolean);
@@ -197,6 +329,40 @@ async function fetchSinaHourBars(sinaSymbol) {
   }
 
   return [...byHour.values()].sort((a, b) => dateToNum(a.date) - dateToNum(b.date));
+}
+
+/** 新浪 few-min：type=5/15/60 → 约 1023 根，可补最近窗口；须与磁盘 tick 历史 merge */
+function normIntradayDate(raw) {
+  const s = String(raw || '').trim();
+  const m = s.match(/^(\d{4}-\d{2}-\d{2})[ T](\d{2}):(\d{2})(?::\d{2})?/);
+  if (m) return `${m[1]} ${m[2]}:${m[3]}`;
+  return s.slice(0, 16);
+}
+
+async function fetchSinaFewMinBars(sinaSymbol, minutes = 5) {
+  const type = Number(minutes) || 5;
+  const url = `https://stock2.finance.sina.com.cn/futures/api/json.php/InnerFuturesNewService.getFewMinLine?symbol=${encodeURIComponent(sinaSymbol)}&type=${type}`;
+  const rows = await fetchJson(url, { headers: SINA_HEADERS, retries: 2 });
+  if (!Array.isArray(rows)) return [];
+
+  return rows
+    .map((row) => {
+      if (!row || typeof row !== 'object') return null;
+      const bar = normalizeBar({
+        date: normIntradayDate(row.d),
+        open: parseFloat(row.o),
+        high: parseFloat(row.h),
+        low: parseFloat(row.l),
+        close: parseFloat(row.c),
+        volume: parseFloat(row.v),
+      });
+      if (!bar) return null;
+      const oi = parseFloat(row.p);
+      if (oi > 0) bar.openInterest = Math.round(oi);
+      return bar;
+    })
+    .filter(Boolean)
+    .sort((a, b) => dateToNum(a.date) - dateToNum(b.date));
 }
 
 async function fetchEastMoneyPage(secid, klt, lmt, end) {
@@ -288,7 +454,23 @@ async function fetchBarsForCommodity(meta, timeframe) {
   let source = 'sina';
   let bars = [];
 
-  if (meta.eastmoneySecid) {
+  // 分钟/小时：优先新浪 FewMin（东财 futures push2his 经常不可达）
+  if ((timeframe === '5m' || timeframe === '15m' || timeframe === 'hour') && meta.sinaSymbol) {
+    try {
+      bars = await fetchSinaFewMinBars(meta.sinaSymbol, TIMEFRAMES[timeframe].sinaType || 5);
+      if (bars.length >= 2) source = 'sina-fewmin';
+    } catch {
+      bars = [];
+    }
+  }
+
+  if (
+    bars.length < 2 &&
+    meta.eastmoneySecid &&
+    timeframe !== '5m' &&
+    timeframe !== '15m' &&
+    timeframe !== 'hour'
+  ) {
     try {
       bars = await fetchEastMoneyBars(meta.eastmoneySecid, timeframe);
       if (bars.length >= 2) source = 'eastmoney';
@@ -301,6 +483,8 @@ async function fetchBarsForCommodity(meta, timeframe) {
     if (timeframe === 'hour') {
       bars = await fetchSinaHourBars(meta.sinaSymbol);
       source = 'sina-hour-recent';
+    } else if (timeframe === '5m' || timeframe === '15m') {
+      // already attempted sina-fewmin
     } else {
       const daily = await fetchSinaDailyBars(meta.sinaSymbol);
       if (timeframe === 'day') bars = daily;
@@ -334,7 +518,18 @@ function buildSummary(bars, timeframe) {
   };
 }
 
-async function fetchCommodityHistory(commodityId, timeframe = 'day', { force = false } = {}) {
+function mergeKlineBars(existing, incoming) {
+  const byDate = new Map();
+  for (const bar of existing || []) {
+    if (bar?.date) byDate.set(bar.date, bar);
+  }
+  for (const bar of incoming || []) {
+    if (bar?.date) byDate.set(bar.date, bar);
+  }
+  return [...byDate.values()].sort((a, b) => dateToNum(a.date) - dateToNum(b.date));
+}
+
+async function fetchCommodityHistory(commodityId, timeframe = 'day', { force = false, persist = true } = {}) {
   const meta = getCommodityMeta(commodityId);
   if (!meta) throw new Error('未知品种');
 
@@ -345,8 +540,34 @@ async function fetchCommodityHistory(commodityId, timeframe = 'day', { force = f
     if (cached?.data) return { ...cached.data, fromCache: true };
   }
 
+  // Probe-only: never mutate disk (accuracy checks must not split tip dates).
+  if (persist === false) {
+    const { bars, source } = await fetchBarsForCommodity(meta, timeframe);
+    const finalBars = finalizeBars(bars, timeframe);
+    return {
+      id: meta.id,
+      name: meta.name,
+      exchange: meta.exchange,
+      unit: meta.unit,
+      timeframe,
+      source,
+      summary: buildSummary(finalBars, timeframe),
+      klines: finalBars,
+      fromCache: false,
+      persisted: false,
+    };
+  }
+
+  const existing = diskCache.readStale(diskKey)?.data?.klines || [];
+  // force 且已有历史：走 merge 增量，禁止短序列整文件覆盖长历史
+  if (force && existing.length >= 30) {
+    return refreshCommodityKline(commodityId, timeframe, existing);
+  }
+
   const { bars, source } = await fetchBarsForCommodity(meta, timeframe);
-  const summary = buildSummary(bars, timeframe);
+  const merged = existing.length ? mergeKlineBars(existing, bars) : bars;
+  const finalBars = finalizeBars(merged, timeframe);
+  const summary = buildSummary(finalBars, timeframe);
 
   const data = {
     id: meta.id,
@@ -356,11 +577,11 @@ async function fetchCommodityHistory(commodityId, timeframe = 'day', { force = f
     timeframe,
     source,
     sourceNote:
-      source === 'sina-hour-recent'
-        ? '小时K：新浪近期数据（完整20年小时K需东方财富数据源，当前网络暂不可达时将显示近期数据）'
+      source === 'sina-hour-recent' || source === 'sina-fewmin'
+        ? '分钟/小时K：新浪增量合并（东财 push2his 不可达时保留磁盘历史）'
         : null,
     summary,
-    klines: bars,
+    klines: finalBars,
   };
 
   diskCache.write(diskKey, { data });
@@ -374,7 +595,23 @@ async function refreshCommodityKline(commodityId, timeframe, existingKlines = []
   let latest = [];
   let source = 'sina';
 
-  if (meta.eastmoneySecid) {
+  // 分钟/小时优先新浪，避免东财 push2his 卡住
+  if ((timeframe === '5m' || timeframe === '15m' || timeframe === 'hour') && meta.sinaSymbol) {
+    try {
+      latest = await fetchSinaFewMinBars(meta.sinaSymbol, TIMEFRAMES[timeframe].sinaType || 5);
+      if (latest.length >= 1) source = 'sina-fewmin';
+    } catch {
+      latest = [];
+    }
+  }
+
+  if (
+    latest.length < 1 &&
+    meta.eastmoneySecid &&
+    timeframe !== '5m' &&
+    timeframe !== '15m' &&
+    timeframe !== 'hour'
+  ) {
     try {
       const tf = TIMEFRAMES[timeframe];
       if (timeframe === 'year') {
@@ -396,6 +633,9 @@ async function refreshCommodityKline(commodityId, timeframe, existingKlines = []
     if (timeframe === 'hour') {
       latest = await fetchSinaHourBars(meta.sinaSymbol);
       source = 'sina-hour-recent';
+    } else if (timeframe === '5m' || timeframe === '15m') {
+      latest = await fetchSinaFewMinBars(meta.sinaSymbol, TIMEFRAMES[timeframe].sinaType || 5);
+      source = 'sina-fewmin';
     } else {
       const daily = await fetchSinaDailyBars(meta.sinaSymbol);
       if (timeframe === 'day') latest = daily.slice(-15);
@@ -433,5 +673,7 @@ module.exports = {
   fetchCommodityHistory,
   refreshCommodityKline,
   listCommoditiesWithHistory,
+  fetchFuturesDailyWithOi,
+  MIN_HISTORY_START,
   TIMEFRAMES,
 };

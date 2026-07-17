@@ -72,7 +72,7 @@ const POLICY_EVENT_PROFILES = [
     id: 'antiInvolution',
     label: '反内卷',
     keywords: ['反内卷', '内卷', '减产自律', '去产能'],
-    instruments: ['FG', 'ps', 'jm', 'lc'],
+    instruments: ['fg', 'sa', 'si', 'ps', 'lc', 'rb', 'i', 'jm', 'ta', 'ma', 'eg', 'al', 'ao'],
     defaultDirection: 'bullish',
   },
   {
@@ -275,7 +275,7 @@ function assessSupplyDemand(instrument, policy, climate, geo, inventory, news, m
       macroChina: china.score ?? 0,
       weight: +weight.toFixed(3),
     },
-    summary: `${SD_STATE_LABELS[state]}（${score >= 0 ? '+' : ''}${score.toFixed(2)}）`,
+    summary: `${SD_STATE_LABELS[state]}（${score >= 0 ? '+' : '-'}${score.toFixed(2)}）`,
   };
 }
 
@@ -339,7 +339,7 @@ function assessFinancialEnvironment(fed, boj, forex, indices, options = {}) {
   const { yoyProxy: m2YoY, score: m2Score } = computeM2YoYProxy(fed);
   const spread = parseFloat(findIndicator(fed?.indicators, 'T10Y2Y')?.value);
 
-  if (!Number.isNaN(dff)) {
+  if (dff != null && !Number.isNaN(dff)) {
     if (dff <= 1.5) score += 0.35;
     else if (dff <= 2.5) score += 0.12;
     else if (dff >= 5) score -= 0.38;
@@ -349,14 +349,14 @@ function assessFinancialEnvironment(fed, boj, forex, indices, options = {}) {
   score += dffTrend;
   if (dffTrend !== 0) parts.push(`FFR趋势${dffTrend > 0 ? '↓' : '↑'}`);
   score += m2Score;
-  if (m2YoY != null) parts.push(`M2 YoY代理 ${m2YoY >= 0 ? '+' : ''}${m2YoY.toFixed(1)}%`);
+  if (m2YoY != null) parts.push(`M2 YoY代理 ${m2YoY >= 0 ? '+' : '-'}${m2YoY.toFixed(1)}%`);
   if (!Number.isNaN(spread) && spread < -0.2) score -= 0.12;
 
   const dxy = findForexPair(forex, 'dxy');
   const dxyChg = Number(dxy?.changePct) || 0;
   if (dxyChg > 0.2) score -= 0.15;
   else if (dxyChg < -0.2) score += 0.12;
-  if (dxy) parts.push(`DXY ${dxyChg >= 0 ? '+' : ''}${dxyChg.toFixed(2)}%`);
+  if (dxy) parts.push(`DXY ${dxyChg >= 0 ? '+' : '-'}${dxyChg.toFixed(2)}%`);
 
   const usIdx = findUsIndices(indices);
   const avgChg = usIdx.length ? usIdx.reduce((s, i) => s + (Number(i.changePct) || 0), 0) / usIdx.length : 0;
@@ -991,7 +991,7 @@ function evaluateInstrumentPhilosophy(ctx) {
     paradigmHint,
     logicSummary: [
       `供需：${sd.summary}`,
-      `金融：${finance.regimeLabel}（${finance.score >= 0 ? '+' : ''}${finance.score.toFixed(2)}）`,
+      `金融：${finance.regimeLabel}（${finance.score >= 0 ? '+' : '-'}${finance.score.toFixed(2)}）`,
       `组合：${sdFinance.note}`,
       paradigmHint,
     ]
@@ -1000,8 +1000,66 @@ function evaluateInstrumentPhilosophy(ctx) {
   };
 }
 
+const {
+  analyzeTrendStructure,
+  applyTrendStructureDirectionFilter,
+} = require('./trend-structure-analyzer');
+
+const NEWS_ARCHETYPES = {
+  shock_event: 'shock_event',
+  narrative_theme: 'narrative_theme',
+  routine: 'routine',
+};
+
+const SHOCK_KEYWORDS = [
+  '战争', '冲突', '制裁', '关税', '袭击', '禁运', '暴跌', '熔断', '紧急', '入侵', '轰炸',
+  'tariff', 'invasion', 'strike', 'embargo', 'war', 'attack',
+];
+const NARRATIVE_KEYWORDS = [
+  'AI', '算力', '数据中心', '碳中和', '新能源', '叙事', 'datacenter', 'green transition', '基建',
+];
+
+function classifyNewsArchetype(title = '', notes = '', tags = '') {
+  const text = `${title} ${notes} ${tags}`;
+  if (SHOCK_KEYWORDS.some((k) => text.includes(k))) return NEWS_ARCHETYPES.shock_event;
+  if (NARRATIVE_KEYWORDS.some((k) => text.toLowerCase().includes(k.toLowerCase()))) {
+    return NEWS_ARCHETYPES.narrative_theme;
+  }
+  return NEWS_ARCHETYPES.routine;
+}
+
+function eventStimulusDecay(eventId, priorHitCount = 0) {
+  if (priorHitCount <= 0) return 1;
+  return +Math.max(0.35, 1 - priorHitCount * 0.28).toFixed(4);
+}
+
+function applyItemStimulusWeight(item = {}, ctx = {}) {
+  const { priorRows = [] } = ctx;
+  const archetype = classifyNewsArchetype(item.title, item.notes, item.eventId);
+  const key = String(item.eventId || item.title || '').slice(0, 120);
+  const priorCount = priorRows.filter((r) => {
+    const rk = String(r.event_id || r.title || '').slice(0, 120);
+    return rk && rk === key;
+  }).length;
+  const decay = eventStimulusDecay(key, priorCount);
+  let multiplier = 1;
+  if (archetype === NEWS_ARCHETYPES.shock_event && priorCount === 0) multiplier = 1.28;
+  else if (archetype === NEWS_ARCHETYPES.narrative_theme) {
+    return { archetype, decay: Math.max(decay, 0.82), multiplier: 1.12 };
+  }
+  return { archetype, decay, multiplier };
+}
+
+function classifyEventPath(event = {}, sector = '') {
+  const title = `${event.title || ''} ${event.eventType || ''}`.toLowerCase();
+  if (/干旱|洪涝|霜冻|减产|drought|frost/.test(title) || sector === 'agriculture') return 'supply_shock';
+  if (/海峡|地缘|战争|tariff|制裁|hormuz|ukraine/.test(title) || sector === 'energy') return 'geo_supply';
+  return 'policy_macro';
+}
+
 module.exports = {
   PHILOSOPHY_VERSION,
+  NEWS_ARCHETYPES,
   SD_FINANCE_MATRIX,
   SD_STATE_LABELS,
   FINANCE_LABELS,
@@ -1023,4 +1081,10 @@ module.exports = {
   evaluateInstrumentPhilosophy,
   getCrudeChangePct,
   scoreMacroChina,
+  classifyNewsArchetype,
+  eventStimulusDecay,
+  applyItemStimulusWeight,
+  classifyEventPath,
+  trendStructureAnalyzer: analyzeTrendStructure,
+  applyTrendStructureDirectionFilter,
 };

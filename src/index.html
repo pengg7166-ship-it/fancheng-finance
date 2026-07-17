@@ -6,6 +6,7 @@
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self';" />
   <title>梵澄金融</title>
   <link rel="stylesheet" href="styles.css" />
+  <link rel="stylesheet" href="intel-center.css" />
   <link rel="stylesheet" href="reading-layout.css" />
 </head>
 <body>
@@ -36,7 +37,7 @@
       <button class="tab" data-tab="policy" role="tab">政策雷达</button>
       <button class="tab" data-tab="geopolitics" role="tab">地缘政治</button>
       <button class="tab" data-tab="climate" role="tab">天气气候</button>
-      <button class="tab tab-outlook-core nav-tab--core" data-tab="outlook" role="tab" title="核心研判 · 全板块数据汇入">
+      <button class="tab tab-outlook-core nav-tab--core" data-tab="outlook" role="tab" title="核心研判 · 决策 One-Pager · Daily Brief · 全板块数据汇入">
         <span class="tab-core-icon" aria-hidden="true">◆</span><span class="tab-core-label">大宗走势研判</span><span class="tab-core-badge">核心</span>
       </button>
       <button class="tab" data-tab="fed" role="tab">美联储</button>
@@ -56,8 +57,13 @@
 
     <footer class="footer">
       <span>数据来源：新浪财经 · 新华社 · CNBC · 圣路易斯联储 · 日本央行 · 美国财政部 · 东方财富 · 金十数据</span>
+      <button type="button" class="data-quality-indicator" id="dataQualityIndicator" title="数据质量状态" aria-live="polite">
+        <span class="data-quality-dot" aria-hidden="true"></span>
+        <span class="data-quality-label" id="dataQualityLabel">数据检测中…</span>
+      </button>
+      <button type="button" class="btn-link footer-philosophy-link" id="philosophyFooterLink">梵澄哲学</button>
       <span id="fredHint" class="hint"></span>
-      <span id="appVersion" class="hint">v1.25.0</span>
+      <span id="appVersion" class="hint">v…</span>
     </footer>
   </div>
 
@@ -69,6 +75,32 @@
         <button class="modal-close" id="settingsClose" type="button" aria-label="关闭">×</button>
       </div>
       <div class="modal-body">
+        <section class="settings-section settings-section-priority">
+          <h3>Cursor 研判分析（大宗走势研判）</h3>
+          <p class="settings-desc">关注品种每日分析、Top5 推荐、追问均使用 <strong>Cursor 模型</strong>。须配置 <code>CURSOR_API_KEY</code>（与下方 LLM 无关）。</p>
+          <div class="settings-row settings-row-stack">
+            <label for="cursorApiKeyInput">Cursor API Key</label>
+            <input id="cursorApiKeyInput" type="password" placeholder="crsr_..." autocomplete="off" spellcheck="false" />
+          </div>
+          <div class="settings-row">
+            <label for="cursorModelInput">模型</label>
+            <input id="cursorModelInput" type="text" placeholder="composer-2.5" autocomplete="off" spellcheck="false" />
+          </div>
+          <div class="settings-row settings-row-stack">
+            <label for="cursorApiUrlInput">本地代理（可选，留空则用 Cursor SDK）</label>
+            <input id="cursorApiUrlInput" type="text" placeholder="留空则使用 Cursor Cloud（推荐）" autocomplete="off" spellcheck="false" />
+          </div>
+          <div class="settings-row">
+            <label for="cursorConcurrencyInput">Cloud 并发数</label>
+            <input id="cursorConcurrencyInput" type="number" min="1" max="6" step="1" placeholder="3" autocomplete="off" spellcheck="false" title="同时进行的 Cursor Cloud 分析数（1–6）" />
+          </div>
+          <div class="settings-row settings-actions">
+            <button class="btn btn-primary" id="cursorSaveBtn" type="button">保存 Cursor 密钥</button>
+            <button class="btn btn-ghost" id="cursorApplyBtn" type="button">获取 API Key</button>
+            <button class="btn btn-ghost" id="cursorTestBtn" type="button">测试 Cursor</button>
+          </div>
+          <p class="settings-status" id="cursorKeyStatus"></p>
+        </section>
         <section class="settings-section">
           <h3>美联储数据接口密钥</h3>
           <p class="settings-desc">用于获取美联储完整经济指标，在圣路易斯联储官网免费注册后即可申请。</p>
@@ -86,6 +118,26 @@
             <button class="btn btn-ghost" id="stooqApplyBtn" type="button">申请密钥</button>
           </div>
           <p class="settings-status" id="stooqKeyStatus"></p>
+        </section>
+        <section class="settings-section">
+          <h3>AI 融合（LLM · 可选）</h3>
+          <p class="settings-desc">用于宏观/品种摘要润色与问答。须为 OpenAI 兼容 <code>chat/completions</code> 接口（如 DeepSeek、OpenAI）。</p>
+          <div class="settings-row settings-row-stack">
+            <label for="llmApiUrlInput">API 地址</label>
+            <input id="llmApiUrlInput" type="url" placeholder="https://api.deepseek.com/v1/chat/completions" autocomplete="off" />
+          </div>
+          <div class="settings-row settings-row-stack">
+            <label for="llmApiKeyInput">API 密钥</label>
+            <input id="llmApiKeyInput" type="password" placeholder="粘贴密钥" autocomplete="off" />
+          </div>
+          <div class="settings-row">
+            <label for="llmModelInput">模型</label>
+            <input id="llmModelInput" type="text" placeholder="deepseek-chat" autocomplete="off" />
+          </div>
+          <div class="settings-row settings-actions">
+            <button class="btn btn-ghost" id="llmTestBtn" type="button">测试连接</button>
+          </div>
+          <p class="settings-status" id="llmKeyStatus"></p>
         </section>
         <section class="settings-section">
           <h3>行情实时刷新</h3>
@@ -112,6 +164,24 @@
           <p class="settings-desc">政策雷达标签页与后台推送默认 30 秒抓取最新部委政策</p>
         </section>
         <section class="settings-section">
+          <h3>海外代理（国际官方源）</h3>
+          <p class="settings-desc">用于 EIA / USDA / IEA 等境外 RSS 与 Federal Register。格式：<code>http://用户:密码@主机:端口</code>，也可设环境变量 <code>FANCHENG_OVERSEAS_PROXY</code>。</p>
+          <div class="settings-row settings-row-stack">
+            <label for="overseasProxyUrlInput">代理地址</label>
+            <input id="overseasProxyUrlInput" type="text" placeholder="http://user:pass@host:port" autocomplete="off" spellcheck="false" />
+          </div>
+          <div class="settings-row">
+            <label for="overseasProxyEnabledInput">启用</label>
+            <input id="overseasProxyEnabledInput" type="checkbox" checked />
+          </div>
+          <p class="settings-status" id="overseasProxyStatus"></p>
+        </section>
+        <section class="settings-section">
+          <h3>梵澄哲学</h3>
+          <p class="settings-desc">产品哲学：变化优先 · 研判为纲 · 缠论为术 · 三槽校正 · 实证对照 · 审慎 gate · 研判详情含 5/15/60 缠论结构提示</p>
+          <button type="button" class="btn btn-ghost" id="philosophySettingsLink">阅读梵澄哲学</button>
+        </section>
+        <section class="settings-section">
           <h3>全量刷新</h3>
           <div class="settings-row">
             <label for="refreshInterval">间隔（分钟）</label>
@@ -125,9 +195,22 @@
     </div>
   </div>
 
+  <div id="philosophyModal" class="modal hidden" role="dialog" aria-labelledby="philosophyModalTitle">
+    <div class="modal-backdrop" id="philosophyModalBackdrop"></div>
+    <div class="modal-panel philosophy-modal-panel">
+      <div class="modal-header">
+        <h2 id="philosophyModalTitle">梵澄哲学</h2>
+        <button class="modal-close" id="philosophyModalClose" type="button" aria-label="关闭">×</button>
+      </div>
+      <div class="modal-body philosophy-modal-scroll"></div>
+    </div>
+  </div>
+
   <script src="i18n.js"></script>
   <script src="chart.js"></script>
+  <script src="price-tick-browser.js"></script>
   <script src="commodities.js"></script>
+  <script src="fancheng-ai-preset-chips.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

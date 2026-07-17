@@ -199,6 +199,7 @@ const CommoditiesUI = (() => {
         <span class="commodity-quote-name">${escapeHtml(item.name)}</span>
         <span class="commodity-quote-ex">${escapeHtml(item.exchange)}</span>
         <span class="commodity-quote-code">${escapeHtml(item.sinaSymbol || item.id)}</span>
+        ${item.priceReason ? `<span class="commodity-close-badge">${escapeHtml(item.priceReason)}${item.closingDate ? ` ${escapeHtml(item.closingDate)}` : ''}</span>` : ''}
       </div>
       <div class="commodity-quote-price ${up ? 'change-up' : 'change-down'}">${formatPrice(item.price)}</div>
       <div class="commodity-quote-change ${up ? 'change-up' : 'change-down'}">
@@ -345,9 +346,14 @@ const CommoditiesUI = (() => {
 
     if (chartEl) {
       chartEl.innerHTML = '';
-      renderKlineChart();
+      drawChartNow(true);
     }
-    renderKlineTable(currentKlines);
+    const deferTable = () => renderKlineTable(currentKlines);
+    if (typeof requestIdleCallback === 'function') {
+      requestIdleCallback(deferTable, { timeout: 2000 });
+    } else {
+      setTimeout(deferTable, 0);
+    }
   }
 
   async function loadHistory(id, timeframe = selectedTimeframe) {
@@ -529,7 +535,7 @@ const CommoditiesUI = (() => {
     if (slider) {
       slider.addEventListener('input', () => {
         klineOffset = parseInt(slider.value, 10) || 0;
-        renderKlineChart();
+        drawChartNow(true);
       });
     }
   }
@@ -567,6 +573,37 @@ const CommoditiesUI = (() => {
 
   let initialized = false;
   let uiBound = false;
+  let chartMounted = false;
+  let lastChartDrawAt = 0;
+  let lastPricePatchAt = 0;
+  const CHART_IDLE_MIN_MS = 60000;
+  const PRICE_IDLE_MIN_MS = 60000;
+
+  function isCommoditiesTabActive() {
+    const panel = $('#panel-commodities');
+    return Boolean(panel?.classList.contains('active'));
+  }
+
+  function isUserIdle() {
+    return typeof window.isUserIdle === 'function' && window.isUserIdle();
+  }
+
+  function destroyChart() {
+    const chartEl = $('#commodityHistoryChart');
+    if (chartEl) {
+      chartEl.innerHTML = '<div class="chart-loading">K 线已暂停（切回本页恢复）</div>';
+    }
+    chartMounted = false;
+  }
+
+  function drawChartNow(force = false) {
+    if (!isCommoditiesTabActive() || !currentKlines.length) return;
+    const now = Date.now();
+    if (!force && isUserIdle() && now - lastChartDrawAt < CHART_IDLE_MIN_MS) return;
+    lastChartDrawAt = now;
+    renderKlineChart();
+    chartMounted = true;
+  }
 
   function isListStale() {
     const listEl = $('#commoditiesList');
@@ -605,21 +642,18 @@ const CommoditiesUI = (() => {
     allItems = flattenLiveData(data);
     updateStats(data);
     if (isListStale()) renderList();
-    else patchLivePrices();
+    else if (isCommoditiesTabActive()) {
+      const now = Date.now();
+      if (isUserIdle() && now - lastPricePatchAt < PRICE_IDLE_MIN_MS) return;
+      lastPricePatchAt = now;
+      patchLivePrices();
+    }
   }
 
   async function loadLive(options = {}) {
     try {
       const data = await window.fancheng.fetchCommoditiesLive(options);
       applyLiveDataToUi(data);
-      if (data.fromCache && !options.force) {
-        window.fancheng
-          .fetchCommoditiesLive({ force: true })
-          .then((fresh) => {
-            if (!fresh?.error) mergeLiveData(fresh);
-          })
-          .catch(() => {});
-      }
       return data;
     } catch (err) {
       applyLiveDataToUi({ error: err.message });
@@ -688,14 +722,22 @@ const CommoditiesUI = (() => {
   }
 
   function onTabActivated() {
+    if (!isCommoditiesTabActive()) return;
     if (window.fancheng?.warmCommodityNewsCache) {
       window.fancheng.warmCommodityNewsCache();
     }
     if (isListStale()) {
       ensureInit(window.__preloadedCommoditiesLive);
-    } else {
+    } else if (!isUserIdle()) {
       loadLive();
     }
+    if (currentKlines.length && !chartMounted) {
+      drawChartNow(true);
+    }
+  }
+
+  function onTabHidden() {
+    destroyChart();
   }
 
   return {
@@ -706,6 +748,7 @@ const CommoditiesUI = (() => {
     mergeLiveData,
     resetCache,
     onTabActivated,
+    onTabHidden,
     focusCommodity: selectCommodity,
     isListPopulated,
   };

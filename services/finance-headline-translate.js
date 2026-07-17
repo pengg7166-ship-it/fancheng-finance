@@ -188,7 +188,7 @@ const ACRONYM_ZH = {
 };
 
 function translateToken(word) {
-  const lower = word.toLowerCase().replace(/['']/g, '');
+  const lower = word.toLowerCase().replace(/[—]/g, '');
   if (!lower || STOP_WORDS.has(lower)) return '';
   if (/^\d+([.,]\d+)?%?$/.test(lower)) return word.replace(/%$/, '%');
   if (ACRONYM_ZH[word]) return ACRONYM_ZH[word];

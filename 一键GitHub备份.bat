@@ -1,7 +1,7 @@
 ﻿@echo off
 chcp 65001 >nul
 setlocal
-cd /d "E:\FanchengFinance\source\fancheng-finance"
+cd /d "F:\FanchengFinance\source\fancheng-finance"
 
 echo ============================================================
 echo   梵澄金融 - 一键 GitHub 备份

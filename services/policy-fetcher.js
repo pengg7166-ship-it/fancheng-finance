@@ -5,6 +5,7 @@ const diskCache = require('./disk-cache');
 const {
   POLICY_DEPARTMENTS,
   POLICY_RSS_FEEDS,
+  POLICY_HTML_FEEDS,
   GOV_CN_POLICY,
   POLICY_FETCH_KEYWORDS,
   getDepartmentById,
@@ -79,6 +80,8 @@ function classifyCnDepartment(title, summary, defaultDepartmentId) {
   for (const dept of POLICY_DEPARTMENTS) {
     if (dept.keywords.some((k) => text.includes(k))) return dept.id;
   }
+  if (/海关总署|海关总|海关商品编号/.test(text)) return 'customs';
+  if (/上期所|大商所|郑商所|中金所|广期所/.test(text)) return 'exchange';
   if (/国务院|国务院办公厅/.test(text)) return 'gov';
   return defaultDepartmentId || 'gov';
 }
@@ -143,10 +146,12 @@ function normalizeItem(raw) {
     title,
     summary: summary ? summary : raw.abstract ? stripHtml(raw.abstract).slice(0, 280) : '',
     link: raw.link,
+    url: raw.link,
     pubDate: raw.pubDate || '',
     sourceId: raw.sourceId,
     sourceName: raw.sourceName,
     documentType: raw.documentType || '',
+    contentType: raw.contentType || (region === 'us' ? 'policy' : 'policy'),
     departmentId,
     departmentName: meta.departmentName,
     departmentShort: meta.departmentShort,
@@ -157,12 +162,16 @@ function normalizeItem(raw) {
 
 async function fetchRssFeed(feed, { region, relevanceFn }) {
   const urls = [feed.url, ...(feed.fallbackUrls || [])];
+  const proxyIntl = region === 'us';
   for (const url of urls) {
     try {
-      const parsed = await Promise.race([
-        parser.parseURL(url),
-        new Promise((_, reject) => setTimeout(() => reject(new Error('RSS 超时')), RSS_TIMEOUT_MS)),
-      ]);
+      const text = await fetchText(url, {
+        headers: parser.options?.headers || parser.headers,
+        timeout: RSS_TIMEOUT_MS,
+        retries: 1,
+        useOverseasProxy: proxyIntl,
+      });
+      const parsed = await parser.parseString(text);
       return (parsed.items || [])
         .slice(0, feed.limit || 50)
         .map((item) => ({
@@ -216,10 +225,109 @@ function extractDateFromGovLink(link) {
   return `${m[1]}-${m[2]}-01T00:00:00+08:00`;
 }
 
+function extractDateFromNdrcLink(link) {
+  const m = link.match(/\/(\d{4})(\d{2})\/t(\d{4})(\d{2})(\d{2})_/);
+  if (!m) return '';
+  return `${m[3]}-${m[4]}-${m[5]}T08:00:00+08:00`;
+}
+
+function extractDateFromMoaLink(link) {
+  const m = link.match(/t(\d{4})(\d{2})(\d{2})_/);
+  if (!m) return '';
+  return `${m[1]}-${m[2]}-${m[3]}T08:00:00+08:00`;
+}
+
+function resolvePolicyLink(link, baseUrl) {
+  if (!link) return '';
+  if (link.startsWith('http')) return link;
+  if (link.startsWith('//')) return `https:${link}`;
+  try {
+    return new URL(link, baseUrl).href;
+  } catch {
+    return link;
+  }
+}
+
+function extractDateNearAnchor(html, index) {
+  const slice = html.slice(index, index + 220);
+  const m = slice.match(/<span[^>]*>\s*(\d{4})[/-](\d{2})[/-](\d{2})/);
+  if (!m) return '';
+  return `${m[1]}-${m[2]}-${m[3]}T08:00:00+08:00`;
+}
+
+function passesPolicyLinkFilter(rawLink, filter) {
+  if (!filter) return true;
+  if (filter === 'art') return /art_[a-f0-9]+\.html/i.test(rawLink);
+  if (filter === 'ndrc-doc') return /t\d{8}_\d+\.html/i.test(rawLink);
+  if (filter === 'moa-doc') return /t\d{8}_\d+\.htm/i.test(rawLink);
+  if (filter === 'exchange-notice') return /\/cn\/(jysgg|zljggzdt)\/\d+\/\d+\.html/i.test(rawLink);
+  if (filter === 'gfex-notice') return /\/gfex\/tzts\/\d{6}\/[a-f0-9]+\.shtml/i.test(rawLink);
+  return true;
+}
+
+async function fetchPolicyHtmlFeed(feed) {
+  const html = await fetchText(feed.url, {
+    timeout: 15000,
+    headers: {
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+      Accept: 'text/html,application/xhtml+xml;q=0.9,*/*;q=0.8',
+    },
+    retries: 2,
+  });
+
+  const seen = new Set();
+  const items = [];
+
+  function pushItem(rawLink, title, index) {
+    if (!title || title.length < 8) return;
+    if (!passesPolicyLinkFilter(rawLink, feed.linkFilter)) return;
+    if (/\.(jpg|png|pdf|zip)$/i.test(rawLink)) return;
+    const link = resolvePolicyLink(rawLink, feed.baseUrl).replace(
+      /^http:\/\/www\.mofcom\.gov\.cn/i,
+      'https://www.mofcom.gov.cn'
+    );
+    const key = `${link}|${title}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    const pubDate =
+      extractDateNearAnchor(html, index) ||
+      extractDateFromNdrcLink(link) ||
+      extractDateFromMoaLink(link) ||
+      extractDateFromGovLink(link) ||
+      '';
+    items.push({
+      title,
+      summary: '',
+      link,
+      pubDate,
+      sourceId: feed.id,
+      sourceName: feed.name,
+      departmentId: feed.departmentId,
+      region: 'cn',
+      contentType: feed.contentType || 'policy',
+    });
+  }
+
+  const titleRe = /href="([^"]+)"[^>]*title="([^"]+)"/g;
+  let m;
+  while ((m = titleRe.exec(html)) && items.length < (feed.limit || 25)) {
+    pushItem(m[1], stripHtml(m[2]), m.index);
+  }
+
+  if (items.length < Math.min(8, feed.limit || 25)) {
+    const textRe = /<a[^>]+href="([^"]+)"[^>]*>([^<]{8,160})</g;
+    while ((m = textRe.exec(html)) && items.length < (feed.limit || 25)) {
+      pushItem(m[1], stripHtml(m[2]), m.index);
+    }
+  }
+
+  return items;
+}
+
 async function fetchFederalRegisterAgency(agency) {
   const url = buildFederalRegisterUrl(agency.slug, agency.limit || 15);
   try {
-    const json = await fetchJson(url, { timeout: FR_TIMEOUT_MS, headers: FR_HEADERS, retries: 1 });
+    const json = await fetchJson(url, { timeout: FR_TIMEOUT_MS, headers: FR_HEADERS, retries: 1, useOverseasProxy: true });
     return (json.results || [])
       .map((doc) => {
         const docType = doc.type || '';
@@ -246,6 +354,17 @@ async function fetchFederalRegisterAgency(agency) {
 async function fetchCnPolicyRaw() {
   const tasks = [
     fetchGovCnPolicies(),
+    ...POLICY_HTML_FEEDS.filter((feed) => feed.departmentId !== 'exchange').map((feed) =>
+      fetchPolicyHtmlFeed(feed)
+    ),
+    (async () => {
+      try {
+        const { fetchExchangeNoticeBundle } = require('./exchange-notice-fetcher');
+        return await fetchExchangeNoticeBundle();
+      } catch {
+        return [];
+      }
+    })(),
     ...POLICY_RSS_FEEDS.map((feed) =>
       fetchRssFeed(feed, { region: 'cn', relevanceFn: isCnPolicyRelevant })
     ),

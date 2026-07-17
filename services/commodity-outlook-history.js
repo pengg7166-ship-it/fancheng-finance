@@ -24,6 +24,7 @@ function getOutlookHistoryRoot() {
   fs.mkdirSync(path.join(root, 'outlook-snapshots'), { recursive: true });
   fs.mkdirSync(path.join(root, 'daily'), { recursive: true });
   fs.mkdirSync(path.join(root, 'daily-compare'), { recursive: true });
+  fs.mkdirSync(path.join(root, 'slot-snapshots'), { recursive: true });
   return root;
 }
 
@@ -390,7 +391,7 @@ function buildReasonTags(prev, next, inst) {
   const oi = inst.factors?.oi?.deltaPct ?? inst.oiDeltaPct;
   const prevOi = prev?.oiDeltaPct;
   if (oi != null && (prevOi == null || Math.abs(oi - prevOi) >= 1)) {
-    tags.push(`持仓${oi > 0 ? '+' : ''}${oi.toFixed(1)}%`);
+    tags.push(`持仓${oi > 0 ? '+' : '-'}${oi.toFixed(1)}%`);
   }
 
   const shock = inst.volForecast?.shockVol ?? inst.shockVol;
@@ -415,7 +416,7 @@ function buildReasonTags(prev, next, inst) {
   const prevPrice = prev?.price;
   if (price != null && prevPrice != null && prevPrice > 0) {
     const chg = ((price - prevPrice) / prevPrice) * 100;
-    if (Math.abs(chg) >= 0.25) tags.push(`现价${chg > 0 ? '+' : ''}${chg.toFixed(2)}%`);
+    if (Math.abs(chg) >= 0.25) tags.push(`现价${chg > 0 ? '+' : '-'}${chg.toFixed(2)}%`);
   }
 
   return tags.length ? tags : ['综合因子更新'];
@@ -703,6 +704,82 @@ function readJsonlForDays(instrumentId, days) {
   return out;
 }
 
+/** 取 predictTs 时刻（优先 ≤）最近的历史研判快照 */
+function lookupOutlookAtTimestamp(instrumentId, predictTs, { lookbackDays = 10 } = {}) {
+  const target = new Date(predictTs).getTime();
+  if (!instrumentId || Number.isNaN(target)) {
+    return { snapshot: null, source: null, lookupTs: null };
+  }
+
+  const rows = readJsonlForDays(instrumentId, lookbackDays);
+  let bestLe = null;
+  let bestLeGap = Infinity;
+  let best = null;
+  let bestAbs = Infinity;
+
+  for (const row of rows) {
+    const t = new Date(row.ts).getTime();
+    if (Number.isNaN(t)) continue;
+    const abs = Math.abs(t - target);
+    if (abs < bestAbs) {
+      bestAbs = abs;
+      best = row;
+    }
+    if (t <= target && target - t < bestLeGap) {
+      bestLeGap = target - t;
+      bestLe = row;
+    }
+  }
+
+  if (!bestLe && !best) {
+    const latest = readLatestSnapshot(instrumentId);
+    if (latest) {
+      return { snapshot: latest, source: 'latest-fallback', lookupTs: latest.ts || null };
+    }
+    return { snapshot: null, source: null, lookupTs: null };
+  }
+
+  const snapshot = bestLe || best;
+  return {
+    snapshot,
+    source: bestLe ? 'jsonl-le' : 'jsonl-nearest',
+    lookupTs: snapshot.ts || null,
+  };
+}
+
+/** 历史快照 → 槽位捕获用的 instrument 形态（叠在 live shell 上） */
+function historySnapshotToInstrumentShape(snap, liveInst = {}) {
+  if (!snap) return null;
+  const baseRange = snap.baseRange || snap.scenarios?.base || null;
+  return {
+    ...liveInst,
+    id: snap.instrumentId || liveInst.id,
+    price: snap.price ?? liveInst.price,
+    compositeScore: snap.compositeScore ?? liveInst.compositeScore,
+    directionLabel: snap.directionLabel ?? liveInst.directionLabel,
+    directionTier: snap.directionTier ?? liveInst.directionTier,
+    direction: snap.directionTier ?? snap.direction ?? liveInst.direction,
+    scenarios: snap.scenarios || (baseRange ? { base: baseRange } : liveInst.scenarios),
+    nextDayRangePct: baseRange || liveInst.nextDayRangePct,
+    factorBreakdown: snap.factorBreakdown ?? liveInst.factorBreakdown,
+    predictionRationale: snap.predictionRationale ?? liveInst.predictionRationale,
+    wInstant: snap.wInstant ?? liveInst.wInstant,
+    wDelayed: snap.wDelayed ?? liveInst.wDelayed,
+    instantScore: snap.instantScore ?? liveInst.instantScore,
+    delayedScore: snap.delayedScore ?? liveInst.delayedScore,
+    latencyState: snap.latencyState ?? liveInst.latencyState,
+    latencyLabel: snap.latencyLabel ?? liveInst.latencyLabel,
+    volForecast: snap.volForecast ?? liveInst.volForecast,
+    shockVol: snap.shockVol ?? liveInst.shockVol,
+    newsHits: snap.newsHits ?? liveInst.newsHits,
+    regime: snap.regime ?? liveInst.regime,
+    regimeLabel: snap.regimeLabel ?? liveInst.regimeLabel,
+    dataQuality: snap.dataQuality ?? liveInst.dataQuality,
+    insufficientData: snap.insufficientData ?? liveInst.insufficientData,
+    judgementUpdatedAt: snap.ts || liveInst.judgementUpdatedAt,
+  };
+}
+
 function getPendingPrediction(instrumentId) {
   const latest = readLatestSnapshot(instrumentId);
   if (latest?.predictedMid == null || latest.priceAtPredict == null) return null;
@@ -851,4 +928,6 @@ module.exports = {
   getDailyCompare,
   bootstrapDailyOutlook,
   getYesterdayArchiveCompare,
+  lookupOutlookAtTimestamp,
+  historySnapshotToInstrumentShape,
 };

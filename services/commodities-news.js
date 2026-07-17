@@ -101,6 +101,8 @@ const FAST_SOURCES = [
   { id: 'eastmoney-futures', name: '东方财富·期货', type: 'eastmoney-roll', category: 'futures' },
   { id: '100ppi', name: '生意社', type: '100ppi', category: 'industry' },
   { id: 'xinhua-fortune', name: '新华社财经', type: 'rss', url: 'http://www.news.cn/fortune/news_fortune.xml', category: 'macro' },
+  { id: 'eia-today', name: 'EIA·能源要闻', type: 'rss', url: 'https://www.eia.gov/rss/todayinenergy.xml', category: 'global', translate: true },
+  { id: 'usda-press', name: 'USDA·公告', type: 'rss', url: 'https://www.usda.gov/media/press-releases/rss.xml', category: 'global', translate: true },
 ];
 
 /** 境外源：后台加载，短超时 */
@@ -127,6 +129,22 @@ const GLOBAL_SOURCES = [
     name: 'OilPrice.com',
     type: 'rss',
     url: 'https://oilprice.com/rss/main',
+    category: 'global',
+    translate: true,
+  },
+  {
+    id: 'iea-news',
+    name: 'IEA·新闻',
+    type: 'rss',
+    url: 'https://www.iea.org/news/rss',
+    category: 'global',
+    translate: true,
+  },
+  {
+    id: 'reuters-commodities',
+    name: 'Reuters·商品',
+    type: 'rss',
+    url: 'https://feeds.reuters.com/reuters/USenergyNews',
     category: 'global',
     translate: true,
   },
@@ -220,16 +238,45 @@ function scoreNewsItem(item, keywords, meta) {
   const text = `${item.title} ${item.summary}`.toLowerCase();
   let score = 0;
   if (meta?.name && item.title.includes(meta.name)) score += 12;
-  if (meta?.id && text.includes(String(meta.id).toLowerCase())) score += 8;
+  const symId = String(meta?.id || '').toLowerCase();
+  if (symId.length >= 3 && text.includes(symId)) score += 8;
   for (const kw of keywords) {
     const k = String(kw).toLowerCase().trim();
     if (!k || k.length < 2) continue;
+    if (!/[\u4e00-\u9fff]/.test(k) && k.length <= 2) continue;
     if (text.includes(k)) score += k.length >= 4 ? 4 : k.length === 2 ? 1 : 2;
   }
   if (item.category === 'industry') score += 2;
   if (item.source === 'eastmoney-search') score += 5;
   if (item.category === 'futures') score += 1;
   return score;
+}
+
+function hasDirectSymbolMention(text, meta, keywords) {
+  const t = String(text || '');
+  const lower = t.toLowerCase();
+  const name = String(meta?.name || '').trim();
+  if (name.length >= 2 && t.includes(name)) return true;
+  const id = String(meta?.id || '').toLowerCase();
+  if (id.length >= 3 && lower.includes(id)) return true;
+  for (const kw of keywords) {
+    const k = String(kw).trim();
+    if (!k || k.length < 2) continue;
+    if (/[\u4e00-\u9fff]/.test(k)) {
+      if (t.includes(k)) return true;
+      continue;
+    }
+    const kl = k.toLowerCase();
+    if (kl.length <= 2) continue;
+    if (kl.length >= 4 && lower.includes(kl)) return true;
+    if (kl.length === 3 && new RegExp(`\\b${kl.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i').test(t)) return true;
+  }
+  return false;
+}
+
+function isUsRegulatoryNewsItem(item) {
+  const blob = `${item?.source || ''} ${item?.sourceName || ''} ${item?.title || ''} ${item?.url || ''}`;
+  return /联邦公报|federalregister|federal register|sec |cftc|ofac|treasury|sec\.gov/i.test(blob);
 }
 
 function dedupeNews(items) {
@@ -503,6 +550,19 @@ function getGlobalNewsPoolSync() {
   return globalPoolCache.items;
 }
 
+function getFastNewsPoolSync() {
+  hydrateNewsFromDisk();
+  if (Date.now() - fastPoolCache.at < POOL_TTL_MS && fastPoolCache.items.length > 0) {
+    return fastPoolCache.items;
+  }
+  if (fastPoolCache.items.length > 0) {
+    refreshFastPoolInBackground().catch(() => {});
+    return fastPoolCache.items;
+  }
+  const stale = diskCache.readStale(FAST_DISK_KEY);
+  return Array.isArray(stale?.items) ? stale.items : [];
+}
+
 function categorizeNews(scored, pool, meta, limit = 20) {
   const related = scored
     .filter((i) => i.relevance >= 4 || (meta.name && i.title.includes(meta.name)))
@@ -696,6 +756,7 @@ module.exports = {
   fetchCommoditiesNewsOverview,
   getCachedCommodityNews,
   getFastNewsPool,
+  getFastNewsPoolSync,
   getGlobalNewsPoolSync,
   warmNewsCache,
   invalidateNewsCache,
@@ -703,4 +764,6 @@ module.exports = {
   flushNewsCacheToDisk,
   getNewsKeywords,
   scoreNewsItem,
+  hasDirectSymbolMention,
+  isUsRegulatoryNewsItem,
 };

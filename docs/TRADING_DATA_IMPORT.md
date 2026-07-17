@@ -65,7 +65,37 @@ E:\FanchengFinance\data\history\trading\
   ...
 ```
 
-转换完成后会自动 `--sync-klines`，将数据合并进 `userData/klines/commodity-{id}-day.json`，长周期回测可直接使用。
+转换完成后会自动 `--sync-klines`，将数据合并进 `data/klines/commodity-{id}-day.json`，长周期回测可直接使用。
+
+### 当前状态（2026-06-18）
+
+| 项目 | 状态 |
+|------|------|
+| Tick zip 源 | `E:\BaiduNetdiskDownload` — **1951** 个 zip，201712–202512 |
+| 日 K 转换 | **已完成**（`tick-convert-progress.json` 1951/1951） |
+| 输出 | `E:\FanchengFinance\data\history\trading\{id}.json` |
+| Day klines 同步 | `npm run sync-tick-klines` → `data/klines/commodity-{id}-day.json`（source=`tick-zips-sync`） |
+| P0 日 K 范围 | au/ag/cu: 2017-12-11 ~ 2026-06-16（2063 bars）；rb: 2017-12-12 ~ 2026-06-16（2061 bars） |
+| 分钟/小时 K | tick 聚合 **au/ag/rb 2023–2025 已完成**（721 zips，84k+ 5m bars）；EM 近 ~1 年日更合并 | `npm run backfill-tick-intraday` · `npm run sync-intraday-klines` |
+
+运维命令：
+
+```bash
+# 审计 zip 源 + trading/klines 覆盖（P0）
+npm run audit-tick-inventory
+
+# 转换完成后或 trading/*.json 更新后，同步日 K 缓存
+npm run sync-tick-klines
+
+# 分钟/小时历史（tick 聚合 → klines 缓存）
+npm run backfill-tick-intraday
+
+# 全 P0 + 自定义范围
+node scripts/backfill-tick-intraday.js --instruments au,ag,rb --from 2023-01-01 --to 2025-12-31
+```
+
+> 日更 `daily-data-sync` **不**自动跑 tick 转换（独立长跑）；转换脚本在结束时自动 sync-klines。
+> 日更 `intraday_klines` 仅拉东方财富增量，与 `source=tick-zips-sync` 历史**合并**（2023–2025 tick bar 不会被 EM 整文件覆盖）。
 
 新闻标注并行进行：见 `docs/NEWS_DATA_SOLUTIONS.md`（种子已自动生成 ~50 条，您 later 补 200 个关键日即可）。
 

@@ -1,0 +1,87 @@
+{
+  "version": "v1.44.0-discipline",
+  "dataSource": "public-holiday-calendar",
+  "note": "2025-2026 中国主要节假日休市缺口 · pre/post 窗口为风险提示用",
+  "holidays": [
+    {
+      "id": "2025-spring-festival",
+      "name": "春节",
+      "startDate": "2025-01-28",
+      "endDate": "2025-02-04",
+      "gapTradingDays": 7,
+      "preWindowDays": 3,
+      "postWindowDays": 2,
+      "severity": "high"
+    },
+    {
+      "id": "2025-qingming",
+      "name": "清明节",
+      "startDate": "2025-04-04",
+      "endDate": "2025-04-06",
+      "gapTradingDays": 3,
+      "preWindowDays": 2,
+      "postWindowDays": 1,
+      "severity": "medium"
+    },
+    {
+      "id": "2025-labor-day",
+      "name": "劳动节",
+      "startDate": "2025-05-01",
+      "endDate": "2025-05-05",
+      "gapTradingDays": 5,
+      "preWindowDays": 2,
+      "postWindowDays": 2,
+      "severity": "medium"
+    },
+    {
+      "id": "2025-dragon-boat",
+      "name": "端午节",
+      "startDate": "2025-05-31",
+      "endDate": "2025-06-02",
+      "gapTradingDays": 3,
+      "preWindowDays": 2,
+      "postWindowDays": 1,
+      "severity": "medium"
+    },
+    {
+      "id": "2025-mid-autumn",
+      "name": "中秋节",
+      "startDate": "2025-10-06",
+      "endDate": "2025-10-08",
+      "gapTradingDays": 3,
+      "preWindowDays": 2,
+      "postWindowDays": 1,
+      "severity": "medium"
+    },
+    {
+      "id": "2025-national-day",
+      "name": "国庆节",
+      "startDate": "2025-10-01",
+      "endDate": "2025-10-08",
+      "gapTradingDays": 8,
+      "preWindowDays": 3,
+      "postWindowDays": 2,
+      "severity": "high"
+    },
+    {
+      "id": "2026-spring-festival",
+      "name": "春节",
+      "startDate": "2026-02-16",
+      "endDate": "2026-02-22",
+      "gapTradingDays": 7,
+      "preWindowDays": 3,
+      "postWindowDays": 2,
+      "severity": "high"
+    },
+    {
+      "id": "2026-national-day",
+      "name": "国庆节",
+      "startDate": "2026-10-01",
+      "endDate": "2026-10-07",
+      "gapTradingDays": 7,
+      "preWindowDays": 3,
+      "postWindowDays": 2,
+      "severity": "high"
+    }
+  ]
+}

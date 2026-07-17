@@ -19,6 +19,8 @@ const USER_BATCH_FILES = [
   'user-news-batch4.csv',
   'user-news-batch5.csv',
   'user-news-batch6.csv',
+  'user-news-batch7.csv',
+  'user-news-batch8.csv',
 ];
 
 function normalizeExistingRow(row) {

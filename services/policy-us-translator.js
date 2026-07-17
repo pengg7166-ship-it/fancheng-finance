@@ -107,6 +107,9 @@ async function translateEnToZh(text, context = {}, { force = false } = {}) {
     if (isValidTranslation(source, api)) translated = api;
   }
   if (!isValidTranslation(source, translated)) {
+    if (context.mode === 'body') {
+      return translateRegulatoryTitleLocal(source);
+    }
     translated = buildFallbackTitle(source, context);
   }
 
@@ -170,6 +173,7 @@ function translateDocumentType(type) {
 
 module.exports = {
   translateEnToZh,
+  translateViaMyMemory,
   translateUsPolicyItems,
   translateDocumentType,
   DOCUMENT_TYPE_ZH,

@@ -8,7 +8,7 @@ const eventCalendar = require('./commodity-outlook-event-calendar');
 
 const CALIBRATION_VERSION = 'v1.27.0';
 const CALIBRATION_FILENAME = 'outlook-calibration.json';
-const HIT_RATE_TARGET = 0.7;
+const HIT_RATE_TARGET = null; // v1.49: 不再以 70% 为优化/门控目标
 
 const SECTOR_IDS = ['energy', 'chemical', 'black', 'metals', 'precious', 'agriculture'];
 
@@ -170,8 +170,10 @@ function normalizeSectorWeightEntry(raw, sectorId) {
   if (raw?.hitRate != null) out.hitRate = raw.hitRate;
   if (raw?.hits != null) out.hits = raw.hits;
   if (raw?.total != null) out.total = raw.total;
-  out.directionBull = Number.isFinite(raw?.directionBull) ? raw.directionBull : base.directionBull;
-  out.directionBear = Number.isFinite(raw?.directionBear) ? raw.directionBear : -Math.abs(out.directionBull);
+  out.directionBull = Number.isFinite(raw?.directionBull)
+    ? Math.max(base.directionBull, raw.directionBull)
+    : base.directionBull;
+  out.directionBear = -Math.abs(out.directionBull);
   return out;
 }
 
@@ -521,7 +523,7 @@ function applyAdvancedDirectionFilters({
   return { directionTier: tier, compositeScore: score, directionLabelOverride: labelOverride, filters, dataNeeded };
 }
 
-/** 强多/强空 ensemble — 板块回测命中率不足则降级 */
+/** 强多/强空 — v1.49 移除命中率门控，仅保留板块最低样本保护 */
 function applyEnsembleStrongDirectionRule(directionTier, sector, compositeScore) {
   const sw = getSectorWeights(sector);
   const minHit = sw.strongMinSectorHitRate ?? 0.55;
@@ -538,9 +540,6 @@ function applyEnsembleStrongDirectionRule(directionTier, sector, compositeScore)
         ensembleDowngraded: true,
         reason: longrunRate == null ? '无板块回测数据' : `板块命中${Math.round(longrunRate * 100)}%<${Math.round(minHit * 100)}%`,
       };
-    }
-    if (longrunRate != null && longrunRate < HIT_RATE_TARGET - 0.15 && Math.abs(compositeScore) < 0.22) {
-      tier = { direction: 'neutral', label: '观望', arrow: '→', ensembleDowngraded: true, reason: '板块远未达70%目标·观望' };
     }
   }
   return tier;
@@ -575,7 +574,9 @@ function gridSearchWeightsFromRows(rows, { minSamples = 25, sector = null, defau
           if (row.philosophyScore == null || row.adaptiveScore == null || row.factorComposite == null) continue;
           const composite = clamp(row.philosophyScore * pw + row.adaptiveScore * aw + row.factorComposite * fw, -1, 1);
           const predictedDir = scoreDirectionWithThreshold(composite, th);
-          if (!predictedDir || predictedDir === 'neutral' || !row.actualDir) continue;
+          if (!predictedDir || predictedDir === 'neutral' || !row.actualDir || row.actualDir === 'neutral') {
+            continue;
+          }
           total += 1;
           if (hitDirection(predictedDir, row.actualDir)) hits += 1;
         }
@@ -610,8 +611,8 @@ function gridSearchSectorWeights(allFlatRows) {
         philosophyWeight: tuned.philosophyWeight,
         adaptiveWeight: tuned.adaptiveWeight,
         factorWeight: tuned.factorWeight,
-        directionBull: tuned.directionBull ?? defaults.directionBull,
-        directionBear: tuned.directionBear ?? -defaults.directionBull,
+        directionBull: defaults.directionBull,
+        directionBear: defaults.directionBear,
         hitRate: tuned.hitRate,
         hits: tuned.hits,
         total: tuned.total,
@@ -750,6 +751,19 @@ function tuneWeightsFromLongrunBacktest(longrunSummary, allFlatRows = null) {
   return saveCalibration(patch);
 }
 
+function resetSectorDirectionThresholds() {
+  const cal = loadCalibration(true);
+  const sectorWeights = { ...(cal.sectorWeights || {}) };
+  for (const id of SECTOR_IDS) {
+    const base = DEFAULT_SECTOR_WEIGHTS[id];
+    sectorWeights[id] = normalizeSectorWeightEntry(
+      { ...sectorWeights[id], directionBull: base.directionBull, directionBear: base.directionBear },
+      id
+    );
+  }
+  return saveCalibration({ sectorWeights, thresholdsResetAt: new Date().toISOString() });
+}
+
 module.exports = {
   CALIBRATION_VERSION,
   HIT_RATE_TARGET,
@@ -780,6 +794,7 @@ module.exports = {
   gridSearchEpochWeights,
   tuneWeightsFromBacktest,
   tuneWeightsFromLongrunBacktest,
+  resetSectorDirectionThresholds,
   hitDirection,
   scoreDirection,
 };

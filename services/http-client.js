@@ -3,6 +3,66 @@ const http = require('http');
 const { URL } = require('url');
 
 let electronFetchCache;
+let proxyAgentCache = null;
+
+const CN_HOST_RE = /\.(gov\.cn|com\.cn|cn)$/i;
+const CN_BRAND_RE = /(eastmoney|sina|jin10|cls\.cn|wallstreetcn|100ppi|mofcom|ndrc|gov\.cn)/i;
+
+function getOverseasProxyUrl() {
+  const env = process.env.FANCHENG_OVERSEAS_PROXY || process.env.HTTPS_PROXY || '';
+  if (env.trim()) return env.trim();
+  try {
+    const { readConfig } = require('./config');
+    const cfg = readConfig();
+    if (cfg.overseasProxyEnabled === false) return '';
+    return String(cfg.overseasProxyUrl || '').trim();
+  } catch {
+    return '';
+  }
+}
+
+function shouldUseOverseasProxy(url, options = {}) {
+  if (options.useOverseasProxy === false) return false;
+  const proxy = getOverseasProxyUrl();
+  if (!proxy) return false;
+  if (options.useOverseasProxy === true) return true;
+  try {
+    const host = new URL(url).hostname.toLowerCase();
+    if (CN_HOST_RE.test(host) || CN_BRAND_RE.test(host)) return false;
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function getProxyDispatcher() {
+  const proxy = getOverseasProxyUrl();
+  if (!proxy) return null;
+  if (!proxyAgentCache) {
+    const { ProxyAgent } = require('undici');
+    proxyAgentCache = new ProxyAgent(proxy);
+  }
+  return proxyAgentCache;
+}
+
+async function fetchViaProxy(url, options = {}) {
+  const { fetch: undiciFetch } = require('undici');
+  const timeout = options.timeout ?? 30000;
+  const dispatcher = getProxyDispatcher();
+  const res = await undiciFetch(url, {
+    dispatcher,
+    headers: options.headers,
+    method: options.method || 'GET',
+    signal: AbortSignal.timeout(timeout),
+  });
+  const text = await res.text();
+  return {
+    ok: res.status >= 200 && res.status < 300,
+    status: res.status,
+    text: async () => text,
+    json: async () => JSON.parse(text),
+  };
+}
 
 function getElectronFetch() {
   if (electronFetchCache !== undefined) return electronFetchCache;
@@ -58,6 +118,16 @@ function requestIPv4(url, options = {}) {
 
 async function fetchWithFallback(url, options = {}) {
   const timeout = options.timeout ?? 30000;
+
+  if (shouldUseOverseasProxy(url, options)) {
+    try {
+      const res = await fetchViaProxy(url, options);
+      if (res.ok) return res;
+    } catch {
+      // 代理失败则回退直连
+    }
+  }
+
   const electronFetch = getElectronFetch();
 
   if (electronFetch) {
@@ -130,4 +200,6 @@ module.exports = {
   fetchText,
   fetchWithFallback,
   requestIPv4,
+  getOverseasProxyUrl,
+  shouldUseOverseasProxy,
 };
