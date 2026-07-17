@@ -29,7 +29,6 @@ function findExe() {
       if (fs.existsSync(exe)) return { dir: externalDir, exe };
     }
   }
-
   const verTag = version.replace(/\./g, '');
   const candidates = [
     `dist-v${verTag}\\win-unpacked`,
@@ -48,7 +47,34 @@ function findExe() {
   throw new Error('No packaged EXE found. Run update batch first.');
 }
 
+function findLauncher() {
+  const appDir = getAppDir();
+  const appRoot = process.env.FANCHENG_APP_ROOT
+    || (appDir ? path.dirname(path.dirname(appDir)) : null)
+    || path.join('F:\\', 'FanchengFinance');
+  const bat = path.join(appRoot, '启动梵澄金融.bat');
+  if (fs.existsSync(bat)) {
+    return { target: bat, workDir: appRoot, iconExe: findExe().exe };
+  }
+  const { dir, exe } = findExe();
+  return { target: exe, workDir: dir, iconExe: exe };
+}
+
+function ensureAppIconIco(appDir) {
+  const src = path.join(root, 'build', 'icon.ico');
+  if (!fs.existsSync(src)) return null;
+  const dest = path.join(appDir, 'icon.ico');
+  try {
+    fs.copyFileSync(src, dest);
+  } catch (_) {
+    return null;
+  }
+  return fs.existsSync(dest) ? dest : null;
+}
+
 function findIcon(exePath, appDir) {
+  const deployed = ensureAppIconIco(appDir);
+  if (deployed) return `${deployed},0`;
   const candidates = [
     path.join(root, 'build', 'icon.ico'),
     path.join(root, 'resources', 'icon.ico'),
@@ -107,6 +133,7 @@ Get-ChildItem -LiteralPath $dir -Filter '*.lnk' -ErrorAction SilentlyContinue | 
   } catch {}
   if (-not $remove -and $_.BaseName -like '姊垫*') { $remove = $true }
   if (-not $remove -and $_.BaseName -eq 'FanchengFinance') { $remove = $true }
+  if (-not $remove -and $_.BaseName -eq '梵澄金融') { $remove = $true }
   if ($remove) {
     Remove-Item -LiteralPath $_.FullName -Force
     Write-Host ('Removed: ' + $_.FullName)
@@ -118,14 +145,14 @@ Get-ChildItem -LiteralPath $dir -Filter '*.lnk' -ErrorAction SilentlyContinue | 
 }
 
 function createShortcut(lnkPath) {
-  const { dir, exe } = findExe();
+  const { target, workDir, iconExe } = findLauncher();
   const description = `${productName} v${version}`;
-  const icon = findIcon(exe, dir);
+  const icon = findIcon(iconExe, path.dirname(iconExe));
   const script = `
 $WshShell = New-Object -ComObject WScript.Shell
 $Shortcut = $WshShell.CreateShortcut('${psQuote(lnkPath)}')
-$Shortcut.TargetPath = '${psQuote(exe)}'
-$Shortcut.WorkingDirectory = '${psQuote(dir)}'
+$Shortcut.TargetPath = '${psQuote(target)}'
+$Shortcut.WorkingDirectory = '${psQuote(workDir)}'
 $Shortcut.IconLocation = '${psQuote(icon)}'
 $Shortcut.Description = '${psQuote(description)}'
 $Shortcut.Save()
@@ -146,5 +173,5 @@ for (const lnk of targets) {
   createShortcut(lnk);
 }
 
-console.log(`Shortcuts updated -> ${findExe().exe}`);
+console.log(`Shortcuts updated -> ${findLauncher().target}`);
 console.log(`Description: ${productName} v${version}`);

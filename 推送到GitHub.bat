@@ -1,7 +1,7 @@
 ﻿@echo off
 chcp 65001 >nul
 setlocal
-cd /d "E:\FanchengFinance\source\fancheng-finance"
+cd /d "F:\FanchengFinance\source\fancheng-finance"
 echo 正在推送到 https://github.com/pengg7166-ship-it/fancheng-finance.git ...
 echo 仓库已存在时直接本脚本即可；首次需空仓库时请先运行: 一键GitHub备份.bat
 echo.
