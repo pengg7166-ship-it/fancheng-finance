@@ -1,0 +1,58 @@
+---
+description: Binding data integrity constraints — timeliness, completeness, authenticity; no fabricated UI values
+alwaysApply: true
+---
+
+# 梵澄金融 · 数据完整性（永久约束）
+
+用户指令（永久有效）：
+
+> 回测及全部功能：确保数据的**实时性 / 完整性 / 真实性**；预测数据的**真实性 / 客观性**；**绝不能**为填充界面而提供假数据。
+
+## 三大支柱
+
+| 支柱 | 含义 | 失败时 |
+|------|------|--------|
+| **实时性** | 收盘价、研判缓存、K 线、外盘参考须对齐最新可交易日 | 标记滞后，触发 heal/sync |
+| **完整性** | 74 品种覆盖、存档字段齐全、回测样本可追溯 | 不补假值，显示「暂无」 |
+| **真实性** | 价格/区间/命中来自真实 fetch 或引擎推导，可审计 | critical 阻断 deploy |
+
+## 预测客观性
+
+- 每条 numeric 预测须可追溯：`dataSource` / `method` / `modelSource`、`baselineDate`、`baseClose`
+- 命中率必须带样本量 **n**（如 `68% (34/50)`），禁止裸 `%`
+- pct 波动回退（`pct-vol-fallback`）仅当 **真实 baseline** 存在时允许，且须标注来源
+
+## 回测
+
+- **仅**使用 `readCachedKlines` 等磁盘真实日 K；禁止 synthetic bar 序列
+- actual 来自下一根 K 线 `close`；缺失 actual **不计分**（`scored: false`，`actualSource: 'missing'`）
+- 禁止插值、随机填充或把 missing 当 hit/miss
+
+## UI 诚实状态
+
+缺失数据时显示：**待校验** / **暂无** / **—**，禁止 `|| 0`、`|| '--'` 掩盖缺失。
+
+禁止：`generateFake`、`mock`、`dummy` 生产数值、默认价掩盖 fetch 失败、pct offset 当价格展示。
+
+## Deploy 门禁
+
+发布前必须通过：
+
+1. `node scripts/run-data-quality-audit.js --packaged`（含 fake-data 检查）
+2. `node scripts/verify-deploy-ready.js`
+
+关键模块：
+
+- `services/data-quality-guard.js` — 编排审计与 fake-data 检查
+- `services/daily-close-sync.js` — 收盘价与展示价解析
+- `scripts/run-data-quality-audit.js` — CLI 审计
+- `scripts/verify-deploy-ready.js` — asar +  live audit 门禁
+
+## 修改检查清单
+
+- [ ] 新增数值是否绑定数据源标签？
+- [ ] fetch 失败是否返回 null 而非占位价？
+- [ ] 回测行是否标注 `actualSource` / `scored`？
+- [ ] UI 是否展示样本量 n？
+- [ ] 是否运行 data-quality audit？
