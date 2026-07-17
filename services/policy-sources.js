@@ -43,6 +43,20 @@ const POLICY_DEPARTMENTS = [
     keywords: ['商务部', '进出口', '外贸', '反倾销', '关税', '出口管制', '世贸组织', 'WTO'],
   },
   {
+    id: 'customs',
+    name: '海关总署',
+    shortName: '海关',
+    weight: 2,
+    keywords: ['海关总署', '海关总', '海关监管', '海关商品编号', '通关', '进口许可', '出口许可'],
+  },
+  {
+    id: 'exchange',
+    name: '期货交易所',
+    shortName: '交易所',
+    weight: 2,
+    keywords: ['上期所', '大商所', '郑商所', '中金所', '广期所', '期货交易所', '限仓', '保证金', '持仓限额', '交割'],
+  },
+  {
     id: 'miit',
     name: '工业和信息化部',
     shortName: '工信部',
@@ -88,6 +102,75 @@ const GOV_CN_POLICY = {
   defaultDepartment: 'gov',
 };
 
+/** 部委官网 HTML 列表（RSS 失效时的稳定替代；对照 scripts/_probe-cn-policy-sources.js） */
+const POLICY_HTML_FEEDS = [
+  {
+    id: 'mofcom-policy',
+    name: '商务部·政策发布',
+    url: 'https://www.mofcom.gov.cn/zcfb/index.html',
+    baseUrl: 'https://www.mofcom.gov.cn/',
+    departmentId: 'mofcom',
+    limit: 30,
+    linkFilter: 'art',
+  },
+  {
+    id: 'ndrc-fggz',
+    name: '发改委·发展改革工作',
+    url: 'https://www.ndrc.gov.cn/fggz/',
+    baseUrl: 'https://www.ndrc.gov.cn/fggz/',
+    departmentId: 'ndrc',
+    limit: 30,
+    linkFilter: 'ndrc-doc',
+  },
+  {
+    id: 'ndrc-xwdt',
+    name: '发改委·新闻动态',
+    url: 'https://www.ndrc.gov.cn/xwdt/',
+    baseUrl: 'https://www.ndrc.gov.cn/xwdt/',
+    departmentId: 'ndrc',
+    limit: 30,
+    linkFilter: 'ndrc-doc',
+  },
+  {
+    id: 'miit-press',
+    name: '工信部·新闻发布',
+    url: 'https://www.miit.gov.cn/xwfb/index.html',
+    baseUrl: 'https://www.miit.gov.cn/',
+    departmentId: 'miit',
+    limit: 25,
+    linkFilter: 'art',
+  },
+  {
+    id: 'mara-news',
+    name: '农业农村部·政务动态',
+    url: 'https://www.moa.gov.cn/xw/zwdt/',
+    baseUrl: 'https://www.moa.gov.cn/xw/zwdt/',
+    departmentId: 'mara',
+    limit: 25,
+    linkFilter: 'moa-doc',
+  },
+  {
+    id: 'cffex-notice',
+    name: '中金所·交易所公告',
+    url: 'http://www.cffex.com.cn/jysgg/',
+    baseUrl: 'http://www.cffex.com.cn/',
+    departmentId: 'exchange',
+    limit: 20,
+    linkFilter: 'exchange-notice',
+    contentType: 'exchange-rule',
+  },
+  {
+    id: 'gfex-notice',
+    name: '广期所·通知公告',
+    url: 'http://www.gfex.com.cn/gfex/xxgs/jysgg/list.shtml',
+    baseUrl: 'http://www.gfex.com.cn/',
+    departmentId: 'exchange',
+    limit: 20,
+    linkFilter: 'gfex-notice',
+    contentType: 'exchange-rule',
+  },
+];
+
 const POLICY_FETCH_KEYWORDS = [
   ...new Set(POLICY_DEPARTMENTS.flatMap((d) => d.keywords)),
   '政策',
@@ -109,6 +192,7 @@ function getDepartmentById(id) {
 module.exports = {
   POLICY_DEPARTMENTS,
   POLICY_RSS_FEEDS,
+  POLICY_HTML_FEEDS,
   GOV_CN_POLICY,
   POLICY_FETCH_KEYWORDS,
   getDepartmentById,

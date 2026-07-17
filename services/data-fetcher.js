@@ -4,6 +4,7 @@ const { localizeErrorMessage } = require('./translate');
 const { translateNewsOffline, isMostlyEnglish } = require('./offline-translate');
 const { fetchGlobalIndices, fetchGlobalIndicesSinaOnly } = require('./indices-fetcher');
 const { fetchMacroSource, getCachedMacroSource } = require('./macro-fetcher');
+const { fetchFundamentalsSource, getCachedFundamentalsSource } = require('./commodity-fundamentals-fetcher');
 const { fetchForexSource, getCachedForexSource } = require('./forex-fetcher');
 const { fetchPolicySource, getCachedPolicySource } = require('./policy-fetcher');
 const { fetchGeopoliticsSource, getCachedGeopoliticsSource } = require('./geopolitics-fetcher');
@@ -31,6 +32,31 @@ let dataCache = { at: 0, payload: null };
 let refreshPromise = null;
 let onBackgroundRefresh = null;
 let diskHydrated = false;
+let autoBackgroundRefreshEnabled = false;
+let outlookRecomputeEnabled = false;
+let refreshAbortRequested = false;
+let externalRefreshAbortCheck = null;
+let refreshShouldAbort = () => refreshAbortRequested || Boolean(externalRefreshAbortCheck?.());
+
+function yieldToEventLoop() {
+  return new Promise((resolve) => setImmediate(resolve));
+}
+
+function setAutoBackgroundRefreshEnabled(enabled) {
+  autoBackgroundRefreshEnabled = Boolean(enabled);
+}
+
+function setOutlookRecomputeEnabled(enabled) {
+  outlookRecomputeEnabled = Boolean(enabled);
+}
+
+function setRefreshAbortCheck(fn) {
+  externalRefreshAbortCheck = typeof fn === 'function' ? fn : null;
+}
+
+function abortRefreshCycle() {
+  refreshAbortRequested = true;
+}
 
 function hydrateFromDisk() {
   if (diskHydrated) return;
@@ -149,6 +175,10 @@ const SOURCES = {
   macro: {
     name: '中美宏观',
     dataLabel: '投资决策核心宏观指标',
+  },
+  fundamentals: {
+    name: '品种基本面',
+    dataLabel: 'EIA周度石油库存 · 黑色产量/投资/物价代理',
   },
   forex: {
     name: '外汇',
@@ -271,7 +301,7 @@ function emptySource(key) {
     indicators: [],
     regions: key === 'indices' ? [] : undefined,
     groups:
-      key === 'macro' || key === 'forex' || key === 'policy' || key === 'geopolitics' || key === 'climate'
+      key === 'macro' || key === 'forex' || key === 'policy' || key === 'geopolitics' || key === 'climate' || key === 'fundamentals'
         ? []
         : undefined,
     pairs: key === 'forex' ? [] : undefined,
@@ -288,9 +318,11 @@ async function fetchSourceWithTimeout(key, options = {}) {
   const timeoutMs =
     key === 'indices'
       ? INDICES_TIMEOUT_MS
-      : key === 'macro'
+        : key === 'macro'
         ? 45000
-        : key === 'forex'
+        : key === 'fundamentals'
+          ? 12000
+          : key === 'forex'
           ? 15000
           : key === 'policy'
             ? 30000
@@ -339,6 +371,18 @@ async function fetchSource(key, options = {}) {
       return { ...cached, fromCache: true };
     }
     return fetchMacroSource();
+  }
+
+  if (key === 'fundamentals') {
+    if (options.force) {
+      return fetchFundamentalsSource();
+    }
+    const cached = getCachedFundamentalsSource();
+    if (cached?.indicators?.length) {
+      fetchFundamentalsSource().catch(() => {});
+      return { ...cached, fromCache: true };
+    }
+    return fetchFundamentalsSource();
   }
 
   if (key === 'forex') {
@@ -409,50 +453,63 @@ async function fetchSource(key, options = {}) {
   };
 }
 
-async function refreshAllData() {
-  const keys = ['indices', 'macro', 'forex', 'policy', 'geopolitics', 'climate', 'fed', 'treasury', 'boj', 'xinhua'];
-  const results = await Promise.allSettled(keys.map((key) => fetchSourceWithTimeout(key)));
-
+async function refreshAllData(options = {}) {
+  const { notifyOutlook = false, indicesFull = true } = options;
+  refreshAbortRequested = false;
+  const keys = ['indices', 'macro', 'fundamentals', 'forex', 'policy', 'geopolitics', 'climate', 'fed', 'treasury', 'boj', 'xinhua'];
   const sources = {};
   const errors = [];
 
-  results.forEach((result, i) => {
-    const key = keys[i];
-    if (result.status === 'fulfilled') {
-      sources[key] = result.value;
-    } else {
-      errors.push({ key, message: localizeErrorMessage(result.reason?.message || '未知错误') });
+  for (const key of keys) {
+    if (refreshShouldAbort()) {
+      console.warn('[data-fetcher] refresh cycle aborted before', key);
+      break;
+    }
+    await yieldToEventLoop();
+    const t0 = Date.now();
+    try {
+      const fetchOpts = key === 'indices' ? { sinaOnly: !indicesFull } : {};
+      sources[key] = await fetchSourceWithTimeout(key, fetchOpts);
+    } catch (err) {
+      const message = localizeErrorMessage(err?.message || '未知错误');
+      if (key === 'fundamentals') {
+        const stale = getCachedFundamentalsSource();
+        if (stale?.indicators?.length) {
+          sources[key] = { ...stale, fromCache: true, stale: true };
+          continue;
+        }
+      }
+      errors.push({ key, message });
       sources[key] = {
-        key,
-        name: SOURCES[key].name,
-        news: [],
-        indicators: [],
-        regions: key === 'indices' ? [] : undefined,
-    groups:
-      key === 'macro' || key === 'forex' || key === 'policy' || key === 'geopolitics' || key === 'climate'
-        ? []
-        : undefined,
-    pairs: key === 'forex' ? [] : undefined,
-    items: key === 'policy' || key === 'geopolitics' || key === 'climate' ? [] : undefined,
-        dataLabel: SOURCES[key].dataLabel,
-        updatedAt: new Date().toISOString(),
-        error: localizeErrorMessage(result.reason?.message),
+        ...emptySource(key),
+        error: message,
       };
     }
-  });
+    const elapsed = Date.now() - t0;
+    if (elapsed > 100) {
+      console.warn(`[data-fetcher] slow fetch ${key}: ${elapsed}ms`);
+    }
+    await yieldToEventLoop();
+  }
 
   try {
-    sources.outlook = fetchCommodityOutlookSource(sources);
+    const cachedOutlook = getCachedCommodityOutlookSource();
+    if (cachedOutlook?.instruments?.length || cachedOutlook?.categories?.length) {
+      sources.outlook = { ...cachedOutlook, fromCache: true };
+    } else {
+      sources.outlook = {
+        key: 'outlook',
+        name: SOURCES.outlook.name,
+        dataLabel: SOURCES.outlook.dataLabel,
+        categories: [],
+        instruments: [],
+        factors: [],
+        computing: true,
+        updatedAt: new Date().toISOString(),
+      };
+    }
   } catch {
-    sources.outlook = {
-      key: 'outlook',
-      name: SOURCES.outlook.name,
-      dataLabel: SOURCES.outlook.dataLabel,
-      categories: [],
-      instruments: [],
-      factors: [],
-      updatedAt: new Date().toISOString(),
-    };
+    sources.outlook = emptySource('outlook');
   }
 
   const payload = {
@@ -464,25 +521,38 @@ async function refreshAllData() {
 
   const tagged = {
     ...payload,
-    sources: tagOutlookTrigger(payload.sources, 'background-refresh'),
+    sources: tagOutlookTrigger(payload.sources, 'manual-refresh'),
   };
   dataCache = { at: Date.now(), payload: tagged };
+  await yieldToEventLoop();
   if (payloadHasCacheableData(tagged)) {
-    persistToDisk(withLocalizedBojSources(tagged));
+    setImmediate(() => {
+      try {
+        persistToDisk(withLocalizedBojSources(tagged));
+      } catch (err) {
+        console.error('[data-fetcher] persist failed:', err?.message || err);
+      }
+    });
+  }
+  if (notifyOutlook && outlookRecomputeEnabled && payload.sources) {
+    notifyOutlookSourcesRefreshed(payload.sources);
   }
   return withLocalizedBojSources(tagged);
 }
 
-function scheduleBackgroundRefresh() {
+function scheduleBackgroundRefresh(options = {}) {
+  const force = options.force === true;
+  if (!force && !autoBackgroundRefreshEnabled) return null;
   if (refreshPromise) return refreshPromise;
-  refreshPromise = refreshAllData()
+  refreshAbortRequested = false;
+  refreshPromise = refreshAllData({ notifyOutlook: outlookRecomputeEnabled, indicesFull: force })
     .then((payload) => {
-      if (payload?.sources) notifyOutlookSourcesRefreshed(payload.sources);
       if (typeof onBackgroundRefresh === 'function') onBackgroundRefresh(payload);
       return payload;
     })
     .finally(() => {
       refreshPromise = null;
+      refreshAbortRequested = false;
     });
   return refreshPromise;
 }
@@ -515,13 +585,12 @@ function getCachedAllData() {
   });
 }
 
-async function fetchAllData({ force = false, fast = false } = {}) {
+async function fetchAllData({ force = false, fast = false, skipBackground = true } = {}) {
   hydrateFromDisk();
-  const age = Date.now() - dataCache.at;
   const cached = dataCache.payload;
 
   if (!force && cached) {
-    if (age > DATA_CACHE_TTL_MS) scheduleBackgroundRefresh();
+    if (!skipBackground && autoBackgroundRefreshEnabled) scheduleBackgroundRefresh();
     return {
       ...cached,
       fromCache: true,
@@ -550,6 +619,7 @@ async function fetchAllData({ force = false, fast = false } = {}) {
         treasury: emptySource('treasury'),
         xinhua: emptySource('xinhua'),
         macro: emptySource('macro'),
+        fundamentals: emptySource('fundamentals'),
         forex: emptySource('forex'),
         policy: emptySource('policy'),
         geopolitics: emptySource('geopolitics'),
@@ -565,14 +635,20 @@ async function fetchAllData({ force = false, fast = false } = {}) {
 
     if (hasIndices) {
       dataCache = { at: Date.now(), payload: mergePayloads(dataCache.payload, payload) };
-      persistToDisk(dataCache.payload);
+      setImmediate(() => {
+        try {
+          persistToDisk(dataCache.payload);
+        } catch {
+          // ignore
+        }
+      });
     }
 
-    scheduleBackgroundRefresh();
+    if (!skipBackground && autoBackgroundRefreshEnabled) scheduleBackgroundRefresh();
     return payload;
   }
 
-  return refreshAllData();
+  return refreshAllData({ notifyOutlook: outlookRecomputeEnabled, indicesFull: true });
 }
 
 function invalidateDataCache() {
@@ -588,11 +664,16 @@ function setDataRefreshListener(fn) {
   onBackgroundRefresh = fn;
 }
 
-async function fetchIndicesLive() {
-  const data = await fetchSource('indices');
+async function fetchIndicesLive({ full = false } = {}) {
+  if (refreshShouldAbort()) {
+    const cached = getCachedAllData()?.sources?.indices;
+    return cached ? { ...cached, fromCache: true } : null;
+  }
+  await yieldToEventLoop();
+  const data = await fetchSourceWithTimeout('indices', { sinaOnly: !full });
   const merged = { ...data, fetchedAt: new Date().toISOString(), liveRefreshedAt: new Date().toISOString() };
   if (merged.regions?.some((r) => r.indices?.length)) {
-    patchSourceInCache('indices', merged);
+    patchSourceInCache('indices', merged, { notifyOutlook: false });
   }
   return merged;
 }
@@ -608,22 +689,50 @@ function refreshIndicesInBackground() {
   return indicesRefreshPromise;
 }
 
-async function fetchIndicesQuick() {
+function getCachedIndices() {
   hydrateFromDisk();
-  const cached = getCachedAllData();
-  if (cached?.sources?.indices?.regions?.some((r) => r.indices?.length)) {
-    return { ...cached.sources.indices, fromCache: true };
+  const fromMem = dataCache.payload?.sources?.indices;
+  if (fromMem?.regions?.some((r) => r.indices?.length)) {
+    return {
+      ...fromMem,
+      fromCache: true,
+      fetchedAt: dataCache.payload.fetchedAt || new Date(dataCache.at).toISOString(),
+    };
   }
-  const data = await fetchSourceWithTimeout('indices', { sinaOnly: true });
-  if (data.regions?.some((r) => r.indices?.length)) {
-    persistToDisk({
-      sources: { indices: data },
-      errors: dataCache.payload?.errors || [],
-      fetchedAt: new Date().toISOString(),
-      fredApiKeyConfigured: isFredApiKeyConfigured(),
-    });
+  const stale = diskCache.readStale(DISK_CACHE_KEY);
+  const idx = stale?.payload?.sources?.indices;
+  if (idx?.regions?.some((r) => r.indices?.length)) {
+    return {
+      ...idx,
+      fromCache: true,
+      fetchedAt:
+        stale.payload.fetchedAt ||
+        new Date(stale.savedAt || stale._mtime || Date.now()).toISOString(),
+    };
   }
-  return { ...data, fetchedAt: new Date().toISOString() };
+  return null;
+}
+
+async function fetchIndicesQuick({ cacheOnly = false } = {}) {
+  const cached = getCachedIndices();
+  if (cached) return cached;
+  if (cacheOnly) return null;
+  try {
+    const data = await fetchSourceWithTimeout('indices', { sinaOnly: true });
+    if (data.regions?.some((r) => r.indices?.length)) {
+      persistToDisk({
+        sources: { indices: data },
+        errors: dataCache.payload?.errors || [],
+        fetchedAt: new Date().toISOString(),
+        fredApiKeyConfigured: isFredApiKeyConfigured(),
+      });
+    }
+    return { ...data, fetchedAt: new Date().toISOString() };
+  } catch (err) {
+    const stale = getCachedIndices();
+    if (stale) return stale;
+    throw err;
+  }
 }
 
 const OUTLOOK_TRIGGER_KEYS = new Set([
@@ -647,7 +756,7 @@ function tagOutlookTrigger(sources, triggerKey) {
   };
 }
 
-function patchSourceInCache(key, source) {
+function patchSourceInCache(key, source, options = {}) {
   hydrateFromDisk();
   const normalized =
     key === 'boj' ? ensureBojPayloadLocalized(source) : source;
@@ -665,8 +774,18 @@ function patchSourceInCache(key, source) {
     fredApiKeyConfigured: isFredApiKeyConfigured(),
   };
   dataCache = { at: Date.now(), payload };
-  if (sourceHasData(normalized)) persistToDisk(payload);
-  if (OUTLOOK_TRIGGER_KEYS.has(key)) notifyOutlookSourcesRefreshed(sources);
+  if (sourceHasData(normalized)) {
+    setImmediate(() => {
+      try {
+        persistToDisk(payload);
+      } catch {
+        // ignore
+      }
+    });
+  }
+  const shouldNotifyOutlook =
+    options.notifyOutlook !== false && outlookRecomputeEnabled && OUTLOOK_TRIGGER_KEYS.has(key);
+  if (shouldNotifyOutlook) notifyOutlookSourcesRefreshed(sources);
   return payload;
 }
 
@@ -705,6 +824,7 @@ function refreshFedInBackground() {
 
 module.exports = {
   fetchAllData,
+  refreshAllData,
   fetchIndicesLive,
   refreshIndicesInBackground,
   fetchIndicesQuick,
@@ -715,7 +835,12 @@ module.exports = {
   initDataCacheFromDisk,
   flushDataCacheToDisk,
   getCachedAllData,
+  getCachedIndices,
   scheduleBackgroundRefresh,
   setDataRefreshListener,
+  setAutoBackgroundRefreshEnabled,
+  setOutlookRecomputeEnabled,
+  setRefreshAbortCheck,
+  abortRefreshCycle,
   SOURCES,
 };

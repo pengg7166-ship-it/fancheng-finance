@@ -75,7 +75,7 @@ function computeInstantChannel({
 
   if (absChg >= 0.15) {
     strength += clamp(absChg / 1.2, 0.12, 0.45);
-    signals.push(`盘中${intradayChangePct > 0 ? '+' : ''}${Number(intradayChangePct).toFixed(2)}%`);
+    signals.push(`盘中${intradayChangePct > 0 ? '+' : '-'}${Number(intradayChangePct).toFixed(2)}%`);
   }
   if (volumeRatio >= 1.45) {
     strength += clamp((volumeRatio - 1.2) * 0.22, 0.08, 0.35);
@@ -130,7 +130,7 @@ function computeDelayedChannel({
 
   if (oiDeltaPct != null && Math.abs(oiDeltaPct) >= 0.5) {
     strength += clamp(Math.abs(oiDeltaPct) / 8, 0.1, 0.38);
-    signals.push(`持仓${oiDeltaPct > 0 ? '+' : ''}${Number(oiDeltaPct).toFixed(1)}%`);
+    signals.push(`持仓${oiDeltaPct > 0 ? '+' : '-'}${Number(oiDeltaPct).toFixed(1)}%`);
   }
 
   if (maStack?.alignment) {
@@ -209,8 +209,8 @@ function computeAdaptiveWeights({ instantStrength, newsBurst = 0, volShock = 0, 
 
 function buildLatencyRationale({ instantContrib, delayedContrib, latencyState, wInstant, wDelayed }) {
   const stateLabel = LATENCY_LABELS[latencyState] || latencyState;
-  const instantPart = `盘面已反应(${instantContrib >= 0 ? '+' : ''}${instantContrib.toFixed(2)}即时)`;
-  const delayedPart = `持仓/政策滞后(延迟${delayedContrib >= 0 ? '+' : ''}${delayedContrib.toFixed(2)})`;
+  const instantPart = `盘面已反应(${instantContrib >= 0 ? '+' : '-'}${instantContrib.toFixed(2)}即时)`;
+  const delayedPart = `持仓/政策滞后(延迟${delayedContrib >= 0 ? '+' : '-'}${delayedContrib.toFixed(2)})`;
   return `${instantPart}，${delayedPart}，当前状态:${stateLabel} · w即时${(wInstant * 100).toFixed(0)}%`;
 }
 

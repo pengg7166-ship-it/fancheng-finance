@@ -172,6 +172,20 @@ const US_POLICY_RSS_FEEDS = [
     departmentId: 'us-fed',
     limit: 25,
   },
+  {
+    id: 'eia-today',
+    name: 'EIA Today in Energy',
+    url: 'https://www.eia.gov/rss/todayinenergy.xml',
+    departmentId: 'us-doe',
+    limit: 20,
+  },
+  {
+    id: 'eia-petroleum',
+    name: 'EIA Petroleum RSS',
+    url: 'https://www.eia.gov/petroleum/rss/rss.xml',
+    departmentId: 'us-doe',
+    limit: 25,
+  },
 ];
 
 /** Federal Register API — 按机构 slug 抓取最新规章/公告 */

@@ -23,7 +23,8 @@ const COMMODITY_EXCHANGES = [
       { id: 'ru', name: '天然橡胶', unit: '元/吨', sinaSymbol: 'RU0', global: ['rubber', '橡胶', 'TSR20'] },
       { id: 'sp', name: '纸浆', unit: '元/吨', sinaSymbol: 'SP0', global: ['pulp', '纸浆'] },
       { id: 'ao', name: '氧化铝', unit: '元/吨', sinaSymbol: 'AO0', global: ['alumina', '氧化铝'] },
-      { id: 'br', name: '丁二烯橡胶', unit: '元/吨', sinaSymbol: 'BR0', global: ['synthetic rubber', '合成橡胶'] },
+      { id: 'br', name: '丁二烯橡胶', unit: '元/吨', sinaSymbol: 'BR0', global: ['synthetic rubber', '合成橡胶', 'BR橡胶'] },
+      { id: 'nr', name: '20号胶', unit: '元/吨', sinaSymbol: 'NR0', global: ['TSR20', '20号胶', 'rubber'] },
       { id: 'ad', name: '铸造铝合金', unit: '元/吨', sinaSymbol: 'AD0', global: ['cast aluminum alloy', '铝合金'] },
     ],
   },
@@ -117,15 +118,17 @@ const COMMODITY_EXCHANGES = [
 ];
 
 function enrichItem(exchange, item) {
-  const codeForEm =
-    exchange.id === 'zce' ? item.sinaSymbol.replace(/0$/, '').toUpperCase() : item.id.toLowerCase();
+  // 东财主力连续 secid 为 {prefix}.{CODE}M（如 113.CUM），*888 已空壳
+  const codeRaw =
+    exchange.id === 'zce' ? item.sinaSymbol.replace(/0$/, '') : item.id;
+  const codeForEm = String(codeRaw || '').toUpperCase();
   return {
     ...item,
     exchangeId: exchange.id,
     exchange: exchange.short,
     exchangeName: exchange.name,
     sinaQuote: `nf_${item.sinaSymbol}`,
-    eastmoneySecid: `${exchange.eastmoneyPrefix}.${codeForEm}888`,
+    eastmoneySecid: `${exchange.eastmoneyPrefix}.${codeForEm}M`,
     keywords: [item.name, item.id, item.sinaSymbol.replace(/0$/, ''), ...(item.global || [])],
   };
 }
