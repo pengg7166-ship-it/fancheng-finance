@@ -98,7 +98,7 @@ function parseCsv(text) {
 }
 
 function escapeCsvField(value) {
-  const s = String(value ?? '');
+  const s = String(value ?? '—');
   if (/[",\n\r]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
   return s;
 }
@@ -107,7 +107,7 @@ function rowsToCsv(rows) {
   const lines = [CSV_HEADERS.join(',')];
   for (const row of rows) {
     lines.push(
-      CSV_HEADERS.map((h) => escapeCsvField(row[h] ?? '')).join(',')
+      CSV_HEADERS.map((h) => escapeCsvField(row[h] ?? '—')).join(',')
     );
   }
   return `${lines.join('\n')}\n`;
@@ -257,12 +257,12 @@ function scoreNewsForInstrumentAtDate(meta, profile, date) {
 
   let summary;
   if (hitCount === 0) summary = '资讯中性（0条命中）';
-  else summary = `标注新闻 ${shock >= 0 ? '+' : ''}${shock.toFixed(2)}（${hitCount}条）`;
+  else summary = `标注新闻 ${shock >= 0 ? '+' : '-'}${shock.toFixed(2)}（${hitCount}条）`;
 
   return {
     score,
     shock,
-    shockDisplay: `${shock >= 0 ? '+' : ''}${shock.toFixed(2)}`,
+    shockDisplay: `${shock >= 0 ? '+' : '-'}${shock.toFixed(2)}`,
     confidence: clampStars(hitCount > 0 ? 2 + Math.min(weight, 3) : 1.5),
     summary,
     weight,
@@ -274,6 +274,12 @@ function scoreNewsForInstrumentAtDate(meta, profile, date) {
     bearish,
     topTitle: hits[0]?.title || null,
   };
+}
+
+function getPriorRowsBeforeDate(date) {
+  const { rows } = loadNewsTagged();
+  const d = String(date || '').slice(0, 10);
+  return rows.filter((r) => r.date < d);
 }
 
 function writeNewsTaggedCsv(rows, { backup = true } = {}) {
@@ -301,6 +307,7 @@ module.exports = {
   getRowCount,
   rowToNewsItem,
   scoreNewsForInstrumentAtDate,
+  getPriorRowsBeforeDate,
   writeNewsTaggedCsv,
   escapeCsvField,
 };
